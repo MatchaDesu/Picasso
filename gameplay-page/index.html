@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Picasso? – Drawing Game</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chewy&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- Top header -->
+    <header class="app-header">
+      <h1 class="logo">Picasso?</h1>
+      <button class="btn btn--leave" type="button" data-action="leave">Leave</button>
+    </header>
+
+    <!-- Sub-header: round info, word prompt, timer -->
+    <section class="game-bar" aria-label="Round status">
+      <div class="match-stage">
+        <span class="match-stage__icon" aria-hidden="true">🎲</span>
+        <div>
+          <p class="match-stage__label">MATCH STAGE</p>
+          <p class="match-stage__round">Round <span data-round>1</span> <small>of 5</small></p>
+        </div>
+      </div>
+
+      <div class="word-prompt">
+        <p class="word-prompt__label">YOU ARE DRAWING!</p>
+        <p class="word-prompt__word" data-word>SLEEPING CAT</p>
+      </div>
+
+      <div class="timer" role="timer" aria-live="off">
+        <div class="timer__ring" style="--progress: 100;"><span class="timer__seconds" data-time>60</span></div>
+        <div>
+          <p class="timer__label">TIME REMAINING</p>
+          <p class="timer__value"><span data-time>60</span>s</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="word-hint">
+      <p class="word-hint__label">GUESSER FEED:
+        <span class="word-hint__blanks" aria-label="Word pattern: 8 letters, 3 letters">
+          <i class="word-hint__blank"></i><i class="word-hint__blank"></i><i class="word-hint__blank"></i><i class="word-hint__blank"></i>
+          <i class="word-hint__blank"></i><i class="word-hint__blank"></i><i class="word-hint__blank"></i><i class="word-hint__blank"></i>
+          <i class="word-hint__blank word-hint__blank--space">/</i>
+          <i class="word-hint__blank"></i><i class="word-hint__blank"></i><i class="word-hint__blank"></i>
+        </span>
+      </p>
+      <p class="word-hint__text">💡 Hint: Animal, 2 words (11 letters)</p>
+    </div>
+
+    <!-- Main content: 3 columns -->
+    <main class="game-layout">
+
+      <!-- Left: players -->
+      <aside class="panel player-list" aria-labelledby="players-title">
+        <div class="panel__header">
+          <h2 class="panel__title" id="players-title">👥 Players</h2>
+          <span class="panel__badge">6 / 8 Active</span>
+        </div>
+        <ul class="player-list__items">
+          <li class="player player--self">
+            <span class="player__avatar">🐱<span class="player__badge">✎</span></span>
+            <div class="player__info">
+              <p class="player__name">Player3 <span class="player__tag">(You)</span></p>
+              <p class="player__status">Artist • Drawing</p>
+            </div>
+            <p class="player__score">1,450<small>pts</small></p>
+          </li>
+          <li class="player player--solved">
+            <span class="player__avatar">😺<span class="player__badge">✓</span></span>
+            <div class="player__info">
+              <p class="player__name">Player4 <span class="player__solved-tag">SOLVED!</span></p>
+              <p class="player__status">+250 pts alert</p>
+            </div>
+            <p class="player__score">1,220<small>pts</small></p>
+          </li>
+          <li class="player player--solved">
+            <span class="player__avatar">😻<span class="player__badge">✓</span></span>
+            <div class="player__info">
+              <p class="player__name">Player2</p>
+              <p class="player__status">+190 pts alert</p>
+            </div>
+            <p class="player__score">1,080<small>pts</small></p>
+          </li>
+          <li class="player">
+            <span class="player__avatar">🐱</span>
+            <div class="player__info">
+              <p class="player__name">Player1</p>
+              <p class="player__status">Guessing...</p>
+            </div>
+            <p class="player__score">840<small>pts</small></p>
+          </li>
+          <li class="player">
+            <span class="player__avatar">🐾</span>
+            <div class="player__info">
+              <p class="player__name">Player6</p>
+              <p class="player__status">Guessing...</p>
+            </div>
+            <p class="player__score">610<small>pts</small></p>
+          </li>
+        </ul>
+      </aside>
+
+      <!-- Center: canvas + tools -->
+      <section class="panel canvas-container" aria-label="Drawing area">
+        <div class="canvas-topbar" role="toolbar" aria-label="Canvas actions">
+          <button class="btn btn--icon" type="button" data-action="undo" aria-label="Undo">↶</button>
+          <button class="btn btn--icon" type="button" data-action="redo" aria-label="Redo">↷</button>
+          <span class="canvas-topbar__divider"></span>
+          <button class="btn btn--icon" type="button" data-action="zoom" aria-label="Zoom">🔍</button>
+          <button class="btn btn--icon" type="button" data-action="snapshot" aria-label="Save snapshot">📷</button>
+        </div>
+
+        <div class="canvas-stage">
+          <p class="canvas-stage__status">✎ Player5 is sketching...</p>
+          <canvas class="drawing-canvas" id="drawing-canvas" width="800" height="600"></canvas>
+        </div>
+
+        <div class="palette" role="group" aria-label="Colors">
+          <button class="swatch" type="button" style="--swatch:#1b1b1b" aria-pressed="true" aria-label="Black" data-color="#1b1b1b"></button>
+          <button class="swatch swatch--light" type="button" style="--swatch:#ffffff" aria-pressed="false" aria-label="White" data-color="#ffffff"></button>
+          <button class="swatch" type="button" style="--swatch:#5a4238" aria-pressed="false" aria-label="Brown" data-color="#5a4238"></button>
+          <button class="swatch" type="button" style="--swatch:#b8973f" aria-pressed="false" aria-label="Gold" data-color="#b8973f"></button>
+          <button class="swatch" type="button" style="--swatch:#a2401c" aria-pressed="false" aria-label="Rust" data-color="#a2401c"></button>
+          <button class="swatch" type="button" style="--swatch:#ee7141" aria-pressed="false" aria-label="Orange" data-color="#ee7141"></button>
+          <button class="swatch" type="button" style="--swatch:#f0b09a" aria-pressed="false" aria-label="Peach" data-color="#f0b09a"></button>
+          <button class="swatch" type="button" style="--swatch:#f8dc9c" aria-pressed="false" aria-label="Sand" data-color="#f8dc9c"></button>
+          <button class="swatch" type="button" style="--swatch:#6f5c15" aria-pressed="false" aria-label="Olive" data-color="#6f5c15"></button>
+          <button class="swatch" type="button" style="--swatch:#98f0ea" aria-pressed="false" aria-label="Aqua" data-color="#98f0ea"></button>
+          <button class="swatch" type="button" style="--swatch:#28635f" aria-pressed="false" aria-label="Deep teal" data-color="#28635f"></button>
+          <button class="swatch" type="button" style="--swatch:#6fd0c6" aria-pressed="false" aria-label="Teal" data-color="#6fd0c6"></button>
+          <button class="swatch" type="button" style="--swatch:#b62a25" aria-pressed="false" aria-label="Red" data-color="#b62a25"></button>
+          <button class="swatch swatch--light" type="button" style="--swatch:#f9dcdc" aria-pressed="false" aria-label="Blush" data-color="#f9dcdc"></button>
+          <button class="swatch" type="button" style="--swatch:#8b7268" aria-pressed="false" aria-label="Taupe" data-color="#8b7268"></button>
+          <button class="btn btn--icon palette__picker" type="button" data-action="eyedropper" aria-label="Pick color from canvas">💧</button>
+        </div>
+
+        <div class="toolbar" role="toolbar" aria-label="Drawing tools">
+          <div class="size-picker" role="group" aria-label="Brush size">
+            <span>Size:</span>
+            <button class="size-picker__option" type="button" style="--dot:5px" aria-pressed="false" aria-label="Small" data-size="2"></button>
+            <button class="size-picker__option" type="button" style="--dot:12px" aria-pressed="true" aria-label="Medium" data-size="6"></button>
+            <button class="size-picker__option" type="button" style="--dot:16px" aria-pressed="false" aria-label="Large" data-size="12"></button>
+            <button class="size-picker__option" type="button" style="--dot:20px" aria-pressed="false" aria-label="Extra large" data-size="20"></button>
+          </div>
+          <button class="btn btn--primary" type="button" data-tool="draw" aria-pressed="true">✎ Draw</button>
+          <button class="btn" type="button" data-tool="eraser" aria-pressed="false">Eraser</button>
+          <button class="btn" type="button" data-tool="bucket" aria-pressed="false">Bucket</button>
+          <span class="toolbar__spacer"></span>
+          <button class="btn btn--danger" type="button" data-action="clear">🗑 Clear</button>
+        </div>
+      </section>
+
+      <!-- Right: guesses & chat -->
+      <aside class="panel chat-box" aria-labelledby="chat-title">
+        <div class="panel__header">
+          <h2 class="panel__title" id="chat-title">💬 Guesses &amp; Chat</h2>
+        </div>
+
+        <ul class="chat-box__log" aria-live="polite">
+          <li class="chat-message chat-message--system">Round 3 started! Player 5 is drawing.</li>
+          <li class="chat-message chat-message--wrong">
+            <span class="chat-message__author">Player1:</span>
+            <span class="chat-message__text">Lion</span>
+          </li>
+          <li class="chat-message chat-message--wrong">
+            <span class="chat-message__author">Player2:</span>
+            <span class="chat-message__text">Croissant pillow</span>
+          </li>
+          <li class="chat-message chat-message--correct">
+            <span class="chat-message__author">🎉 Player 3</span>
+            <span class="chat-message__text">guessed the word!</span>
+            <span class="chat-message__points">+250</span>
+          </li>
+          <li class="chat-message chat-message--correct">
+            <span class="chat-message__author">😺 Player 4</span>
+            <span class="chat-message__text">guessed the word!</span>
+            <span class="chat-message__points">+190</span>
+          </li>
+        </ul>
+
+        <form class="guess-form" action="#">
+          <div class="guess-form__field">
+            <input class="guess-form__input" type="text" name="guess" placeholder="Type your guess here..." autocomplete="off" aria-label="Your guess">
+            <button class="guess-form__submit" type="submit" aria-label="Send guess">🐾</button>
+          </div>
+          <p class="guess-form__remaining"><span data-guesses-left>3</span> Guesses left</p>
+        </form>
+      </aside>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>© 2024 Picasso Game Studio. Doodle together!</p>
+      <nav class="app-footer__links" aria-label="Footer">
+        <a href="#">Rules &amp; Tips</a>
+        <span>v1.4.2 Playful Edition</span>
+      </nav>
+    </footer>
+
+  </div>
+</body>
+</html>
