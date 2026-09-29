@@ -21,6 +21,7 @@ function Lobby() {
               <div>
                 <div className="mb-1.5 flex items-center gap-2 text-xs font-bold">
                   Fur Pigment
+
                   <small className="font-normal text-[#666]">
                     Ginger Orange
                   </small>
@@ -118,9 +119,12 @@ function Lobby() {
           </button>
 
           {/* Create Room */}
-          <button className="h-12 w-full cursor-pointer rounded-[24px] border-2 border-black bg-white text-[17px] font-bold">
+          <Link
+            to="/room/create"
+            className="flex h-12 w-full items-center justify-center rounded-[24px] border-2 border-black bg-white text-[17px] font-bold hover:bg-[#f2f2f2]"
+          >
             Create Room
-          </button>
+          </Link>
 
           {/* Join Room */}
           <div className="flex flex-col gap-3 rounded-[18px] border-2 border-black px-[18px] py-[14px]">

@@ -4,6 +4,10 @@ import Header from "./components/Header"
 import Footer from "./components/Footer"
 
 import Lobby from "./pages/Lobby"
+import Room from "./pages/Room"
+import RoomSettings from "./pages/RoomSettings"
+import RoomWaiting from "./pages/RoomWaiting"
+import ScoreSummary from "./pages/ScoreSummary"
 import SignIn from "./pages/SignIn"
 import SignUp from "./pages/SignUp"
 
@@ -15,8 +19,18 @@ function App() {
 
         <main className="flex-1">
           <Routes>
+            {/* Lobby */}
             <Route path="/" element={<Lobby />} />
-            <Route path="/room" element={<h1>Room</h1>} />
+
+            {/* Room */}
+            <Route path="/room" element={<Room />} />
+            <Route path="/room/create" element={<RoomSettings />} />
+            <Route path="/room/waiting" element={<RoomWaiting />} />
+
+            {/* Game Result */}
+            <Route path="/score" element={<ScoreSummary />} />
+
+            {/* Authentication */}
             <Route path="/login" element={<SignIn />} />
             <Route path="/signup" element={<SignUp />} />
           </Routes>
