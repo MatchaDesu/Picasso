@@ -3,150 +3,78 @@ import {
   useRef,
   useState,
 } from "react"
-
 import {
   useLocation,
   useNavigate,
 } from "react-router-dom"
-
 import socket from "../socket"
 
 function Game() {
   const location = useLocation()
   const navigate = useNavigate()
-
   const room = location.state?.room
 
   const canvasRef = useRef(null)
-  const canvasContainerRef =
-    useRef(null)
-
-  const isDrawingRef =
-    useRef(false)
-
-  const lastPositionRef =
-    useRef({ x: 0, y: 0 })
-
-  const undoStackRef =
-    useRef([])
-
-  const redoStackRef =
-    useRef([])
-
+  const canvasContainerRef = useRef(null)
+  const isDrawingRef = useRef(false)
+  const lastPositionRef = useRef({ x: 0, y: 0 })
+  const undoStackRef = useRef([])
+  const redoStackRef = useRef([])
   const timerRef = useRef(null)
+  const scorePopupTimerRef = useRef(null)
+  const selectingWordRef = useRef(false)
 
-  const scorePopupTimerRef =
-    useRef(null)
-
-  const phaseRef = useRef(
-    room?.phase || "choosing"
-  )
-
+  const phaseRef = useRef(room?.phase || "choosing")
   const artistIdRef = useRef(
     location.state?.artistId ||
       room?.artistId ||
       null
   )
 
-  const selectingWordRef =
-    useRef(false)
+  const [selectedColor, setSelectedColor] =
+    useState("#1b1b1b")
+  const [brushSize, setBrushSize] = useState(8)
+  const [tool, setTool] = useState("draw")
 
-  const [
-    selectedColor,
-    setSelectedColor,
-  ] = useState("#1b1b1b")
-
-  const [
-    brushSize,
-    setBrushSize,
-  ] = useState(8)
-
-  const [
-    tool,
-    setTool,
-  ] = useState("draw")
-
-  const [
-    artistId,
-    setArtistId,
-  ] = useState(
+  const [artistId, setArtistId] = useState(
     location.state?.artistId ||
       room?.artistId ||
       null
   )
 
-  const [
-    currentRound,
-    setCurrentRound,
-  ] = useState(
-    location.state?.currentRound ||
-      room?.currentRound ||
-      1
-  )
+  const [currentRound, setCurrentRound] =
+    useState(
+      location.state?.currentRound ||
+        room?.currentRound ||
+        1
+    )
 
-  const [
-    phase,
-    setPhase,
-  ] = useState(
+  const [phase, setPhase] = useState(
     room?.phase || "choosing"
   )
 
-  const [
-    timeRemaining,
-    setTimeRemaining,
-  ] = useState(
-    room?.drawingTime || 60
+  const [timeRemaining, setTimeRemaining] =
+    useState(room?.drawingTime || 60)
+
+  const [currentWord, setCurrentWord] =
+    useState("")
+  const [hint, setHint] = useState("")
+  const [wordPattern, setWordPattern] =
+    useState("")
+  const [wordChoices, setWordChoices] =
+    useState([])
+  const [guess, setGuess] = useState("")
+  const [guessMessages, setGuessMessages] =
+    useState([])
+  const [hasGuessedCorrectly, setHasGuessedCorrectly] =
+    useState(false)
+  const [scorePopup, setScorePopup] =
+    useState(null)
+  const [players, setPlayers] = useState(
+    room?.players || []
   )
-
-  const [
-    currentWord,
-    setCurrentWord,
-  ] = useState("")
-
-  const [
-    hint,
-    setHint,
-  ] = useState("")
-
-  const [
-    wordPattern,
-    setWordPattern,
-  ] = useState("")
-
-  const [
-    wordChoices,
-    setWordChoices,
-  ] = useState([])
-
-  const [
-    guess,
-    setGuess,
-  ] = useState("")
-
-  const [
-    guessMessages,
-    setGuessMessages,
-  ] = useState([])
-
-  const [
-    hasGuessedCorrectly,
-    setHasGuessedCorrectly,
-  ] = useState(false)
-
-  const [
-    scorePopup,
-    setScorePopup,
-  ] = useState(null)
-
-  const [
-    players,
-    setPlayers,
-  ] = useState(room?.players || [])
-
-  const [
-    historyVersion,
-    setHistoryVersion,
-  ] = useState(0)
+  const [historyVersion, setHistoryVersion] =
+    useState(0)
 
   const colors = [
     "#1b1b1b",
@@ -166,6 +94,13 @@ function Game() {
     "#8b7268",
   ]
 
+  const currentPlayer = players.find(
+    (player) => player.id === socket.id
+  )
+
+  const isArtist =
+    currentPlayer?.id === artistId
+
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
@@ -174,207 +109,78 @@ function Game() {
     artistIdRef.current = artistId
   }, [artistId])
 
-  const currentPlayer =
-    players.find(
-      (player) =>
-        player.id === socket.id
-    )
-
-  const isArtist =
-    currentPlayer?.id === artistId
-
-  /*
-   * =========================
-   * Canvas helpers
-   * =========================
-   */
-
-  const getCanvasContext = () => {
-    const canvas = canvasRef.current
-
-    if (!canvas) {
-      return null
-    }
-
-    return canvas.getContext("2d")
-  }
-
-  const setupCanvasContext = () => {
-    const canvas = canvasRef.current
-
-    if (!canvas) {
-      return null
-    }
-
-    const context =
-      canvas.getContext("2d")
-
-    if (!context) {
-      return null
-    }
-
-    const dpr =
-      window.devicePixelRatio || 1
-
-    context.setTransform(
-      dpr,
-      0,
-      0,
-      dpr,
-      0,
-      0
-    )
-
-    context.lineCap = "round"
-    context.lineJoin = "round"
-
-    return context
-  }
-
   const clearLocalCanvas = () => {
     const canvas = canvasRef.current
+    if (!canvas) return
 
-    if (!canvas) {
-      return
-    }
-
-    const context =
-      canvas.getContext("2d")
-
-    if (!context) {
-      return
-    }
+    const context = canvas.getContext("2d")
+    if (!context) return
 
     context.save()
-
-    context.setTransform(
-      1,
-      0,
-      0,
-      1,
-      0,
-      0
-    )
-
+    context.setTransform(1, 0, 0, 1, 0, 0)
     context.clearRect(
       0,
       0,
       canvas.width,
       canvas.height
     )
-
     context.restore()
-
-    setupCanvasContext()
   }
-
-  /*
-   * =========================
-   * Canvas resize
-   * =========================
-   */
 
   useEffect(() => {
     const canvas = canvasRef.current
-    const container =
-      canvasContainerRef.current
+    const container = canvasContainerRef.current
 
-    if (!canvas || !container) {
-      return
-    }
+    if (!canvas || !container) return
 
-    let previousCssWidth = 0
-    let previousCssHeight = 0
+    let previousWidth = 0
+    let previousHeight = 0
 
     const resizeCanvas = () => {
-      const rect =
-        container.getBoundingClientRect()
+      const rect = container.getBoundingClientRect()
 
-      if (
-        rect.width <= 0 ||
-        rect.height <= 0
-      ) {
+      if (rect.width <= 0 || rect.height <= 0) {
         return
       }
 
-      const dpr =
-        window.devicePixelRatio || 1
-
-      const newCssWidth =
-        rect.width
-
-      const newCssHeight =
-        rect.height
-
-      const oldCanvasWidth =
-        canvas.width
-
-      const oldCanvasHeight =
-        canvas.height
+      const dpr = window.devicePixelRatio || 1
+      const width = rect.width
+      const height = rect.height
 
       let oldImage = null
 
       if (
-        oldCanvasWidth > 0 &&
-        oldCanvasHeight > 0 &&
-        previousCssWidth > 0 &&
-        previousCssHeight > 0
+        canvas.width > 0 &&
+        canvas.height > 0 &&
+        previousWidth > 0 &&
+        previousHeight > 0
       ) {
-        try {
-          oldImage =
-            document.createElement(
-              "canvas"
-            )
+        oldImage = document.createElement("canvas")
+        oldImage.width = canvas.width
+        oldImage.height = canvas.height
 
-          oldImage.width =
-            oldCanvasWidth
+        const oldContext =
+          oldImage.getContext("2d")
 
-          oldImage.height =
-            oldCanvasHeight
-
-          const oldContext =
-            oldImage.getContext(
-              "2d"
-            )
-
-          if (oldContext) {
-            oldContext.drawImage(
-              canvas,
-              0,
-              0
-            )
-          }
-        } catch {
-          oldImage = null
+        if (oldContext) {
+          oldContext.drawImage(canvas, 0, 0)
         }
       }
 
       canvas.width = Math.max(
         1,
-        Math.round(
-          newCssWidth * dpr
-        )
+        Math.round(width * dpr)
       )
-
       canvas.height = Math.max(
         1,
-        Math.round(
-          newCssHeight * dpr
-        )
+        Math.round(height * dpr)
       )
 
-      canvas.style.width =
-        `${newCssWidth}px`
+      canvas.style.width = `${width}px`
+      canvas.style.height = `${height}px`
 
-      canvas.style.height =
-        `${newCssHeight}px`
-
-      const context =
-        canvas.getContext("2d")
-
-      if (!context) {
-        return
-      }
+      const context = canvas.getContext("2d")
+      if (!context) return
 
       context.setTransform(
         dpr,
@@ -384,7 +190,6 @@ function Game() {
         0,
         0
       )
-
       context.lineCap = "round"
       context.lineJoin = "round"
 
@@ -397,41 +202,25 @@ function Game() {
           oldImage.height,
           0,
           0,
-          previousCssWidth > 0
-            ? newCssWidth
-            : oldImage.width / dpr,
-          previousCssHeight > 0
-            ? newCssHeight
-            : oldImage.height / dpr
+          previousWidth || oldImage.width / dpr,
+          previousHeight || oldImage.height / dpr
         )
       }
 
-      previousCssWidth =
-        newCssWidth
-
-      previousCssHeight =
-        newCssHeight
+      previousWidth = width
+      previousHeight = height
     }
 
     resizeCanvas()
 
-    const observer =
-      new ResizeObserver(
-        resizeCanvas
-      )
+    const observer = new ResizeObserver(
+      resizeCanvas
+    )
 
     observer.observe(container)
 
-    return () => {
-      observer.disconnect()
-    }
+    return () => observer.disconnect()
   }, [])
-
-  /*
-   * =========================
-   * Draw line
-   * =========================
-   */
 
   const drawLine = ({
     x0,
@@ -443,45 +232,19 @@ function Game() {
     tool: drawTool,
   }) => {
     const canvas = canvasRef.current
+    if (!canvas) return
 
-    if (!canvas) {
+    const context = canvas.getContext("2d")
+    if (!context) return
+
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) {
       return
     }
 
-    const context =
-      canvas.getContext("2d")
-
-    if (!context) {
-      return
-    }
-
-    const rect =
-      canvas.getBoundingClientRect()
-
-    if (
-      rect.width <= 0 ||
-      rect.height <= 0
-    ) {
-      return
-    }
-
-    const startX =
-      x0 * rect.width
-
-    const startY =
-      y0 * rect.height
-
-    const endX =
-      x1 * rect.width
-
-    const endY =
-      y1 * rect.height
-
-    const dpr =
-      window.devicePixelRatio || 1
+    const dpr = window.devicePixelRatio || 1
 
     context.save()
-
     context.setTransform(
       dpr,
       0,
@@ -491,165 +254,100 @@ function Game() {
       0
     )
 
-    context.lineWidth =
-      Number(size) || 8
-
+    context.lineWidth = Number(size) || 8
     context.lineCap = "round"
     context.lineJoin = "round"
 
-    if (
-      drawTool === "eraser"
-    ) {
+    if (drawTool === "eraser") {
       context.globalCompositeOperation =
         "destination-out"
-
-      context.strokeStyle =
-        "#000000"
+      context.strokeStyle = "#000"
     } else {
       context.globalCompositeOperation =
         "source-over"
-
-      context.strokeStyle =
-        color || "#1b1b1b"
+      context.strokeStyle = color || "#1b1b1b"
     }
 
     context.beginPath()
-
     context.moveTo(
-      startX,
-      startY
+      x0 * rect.width,
+      y0 * rect.height
     )
-
     context.lineTo(
-      endX,
-      endY
+      x1 * rect.width,
+      y1 * rect.height
     )
-
     context.stroke()
-
     context.restore()
   }
 
-  /*
-   * =========================
-   * Local timer
-   * =========================
-   */
-
   const stopLocalTimer = () => {
-    if (timerRef.current) {
-      clearInterval(
-        timerRef.current
-      )
+    if (!timerRef.current) return
 
-      timerRef.current = null
-    }
+    clearInterval(timerRef.current)
+    timerRef.current = null
   }
 
-  const startLocalTimer = (
-    roundEndsAt
-  ) => {
+  const startLocalTimer = (roundEndsAt) => {
     stopLocalTimer()
 
-    if (!roundEndsAt) {
-      return
-    }
+    if (!roundEndsAt) return
 
     const updateTimer = () => {
-      const remainingMs =
-        Number(roundEndsAt) -
-        Date.now()
-
-      const remainingSeconds =
-        Math.max(
-          0,
-          Math.ceil(
-            remainingMs / 1000
-          )
+      const seconds = Math.max(
+        0,
+        Math.ceil(
+          (Number(roundEndsAt) - Date.now()) /
+            1000
         )
-
-      setTimeRemaining(
-        remainingSeconds
       )
 
-      if (
-        remainingSeconds <= 0
-      ) {
+      setTimeRemaining(seconds)
+
+      if (seconds <= 0) {
         stopLocalTimer()
-        isDrawingRef.current =
-          false
+        isDrawingRef.current = false
       }
     }
 
     updateTimer()
-
-    timerRef.current =
-      setInterval(
-        updateTimer,
-        250
-      )
+    timerRef.current = setInterval(
+      updateTimer,
+      250
+    )
   }
 
-  /*
-   * =========================
-   * Reset round
-   * =========================
-   */
-
-  const resetRoundState = (
-    roundRoom
-  ) => {
+  const resetRoundState = (roundRoom) => {
     stopLocalTimer()
 
     isDrawingRef.current = false
-
-    selectingWordRef.current =
-      false
+    selectingWordRef.current = false
 
     setCurrentWord("")
     setHint("")
     setWordPattern("")
     setWordChoices([])
     setGuess("")
-    setHasGuessedCorrectly(
-      false
-    )
     setGuessMessages([])
+    setHasGuessedCorrectly(false)
     setScorePopup(null)
+    setTimeRemaining(
+      roundRoom?.drawingTime || 60
+    )
 
     undoStackRef.current = []
     redoStackRef.current = []
 
-    setHistoryVersion(
-      (value) => value + 1
-    )
-
-    setTimeRemaining(
-      roundRoom?.drawingTime ||
-        60
-    )
+    setHistoryVersion((value) => value + 1)
 
     clearLocalCanvas()
   }
 
-  /*
-   * =========================
-   * Socket events
-   * =========================
-   */
-
   useEffect(() => {
-    if (!room?.code) {
-      return
-    }
+    if (!room?.code) return
 
-    const handleRemoteDraw = (
-      data
-    ) => {
-      if (
-        phaseRef.current !==
-        "drawing"
-      ) {
+    const handleRemoteDraw = (data) => {
+      if (phaseRef.current !== "drawing") {
         return
       }
 
@@ -662,142 +360,66 @@ function Game() {
 
     const handleRoundChoosing = ({
       room: choosingRoom,
-      currentRound:
-        choosingRound,
-      artistId:
-        choosingArtistId,
+      currentRound: choosingRound,
+      artistId: choosingArtistId,
     }) => {
-      if (!choosingRoom) {
-        return
-      }
+      if (!choosingRoom) return
 
-      console.log(
-        `Round ${choosingRound}: artist ${choosingArtistId} is choosing`
-      )
+      phaseRef.current = "choosing"
+      artistIdRef.current = choosingArtistId
 
-      phaseRef.current =
-        "choosing"
-
-      artistIdRef.current =
-        choosingArtistId
-
-      selectingWordRef.current =
-        false
-
-      setPlayers(
-        choosingRoom.players ||
-          []
-      )
-
+      setPlayers(choosingRoom.players || [])
       setPhase("choosing")
+      setCurrentRound(choosingRound)
+      setArtistId(choosingArtistId)
 
-      setCurrentRound(
-        choosingRound
-      )
-
-      setArtistId(
-        choosingArtistId
-      )
-
-      resetRoundState(
-        choosingRoom
-      )
+      resetRoundState(choosingRoom)
     }
 
-    const handleWordChoices = ({
-      choices,
-    }) => {
+    const handleRoundTransition = () => {
+      phaseRef.current = "transitioning"
+      artistIdRef.current = null
+
+      setPhase("transitioning")
+      setArtistId(null)
+
+      resetRoundState(room)
+    }
+
+    const handleWordChoices = ({ choices }) => {
       setWordChoices(
-        Array.isArray(choices)
-          ? choices
-          : []
+        Array.isArray(choices) ? choices : []
       )
     }
 
     const handleRoundStarted = ({
       room: startedRoom,
-      currentRound:
-        startedRound,
-      artistId:
-        startedArtistId,
+      currentRound: startedRound,
+      artistId: startedArtistId,
       roundEndsAt,
-      hint:
-        startedHint,
-      wordPattern:
-        startedWordPattern,
+      hint: startedHint,
+      wordPattern: startedWordPattern,
     }) => {
-      if (!startedRoom) {
-        return
-      }
+      if (!startedRoom) return
 
-      console.log(
-        `Round ${startedRound} started. Artist: ${startedArtistId}`
-      )
+      phaseRef.current = "drawing"
+      artistIdRef.current = startedArtistId
 
-      phaseRef.current =
-        "drawing"
-
-      artistIdRef.current =
-        startedArtistId
-
-      selectingWordRef.current =
-        false
-
-      setPlayers(
-        startedRoom.players ||
-          []
-      )
-
+      setPlayers(startedRoom.players || [])
       setPhase("drawing")
-
-      setCurrentRound(
-        startedRound
-      )
-
-      setArtistId(
-        startedArtistId
-      )
-
-      setHint(
-        startedHint || ""
-      )
-
+      setCurrentRound(startedRound)
+      setArtistId(startedArtistId)
+      setHint(startedHint || "")
       setWordPattern(
         startedWordPattern || ""
       )
 
-      setWordChoices([])
-
-      setCurrentWord("")
-      setGuess("")
-
-      setHasGuessedCorrectly(
-        false
-      )
-
-      setGuessMessages([])
-      setScorePopup(null)
-
-      undoStackRef.current = []
-      redoStackRef.current = []
-
-      setHistoryVersion(
-        (value) => value + 1
-      )
-
-      clearLocalCanvas()
-
-      startLocalTimer(
-        roundEndsAt
-      )
+      resetRoundState(startedRoom)
+      startLocalTimer(roundEndsAt)
     }
 
-    const handleArtistWord = ({
-      word,
-    }) => {
-      setCurrentWord(
-        word || ""
-      )
+    const handleArtistWord = ({ word }) => {
+      setCurrentWord(word || "")
     }
 
     const handlePlayerGuess = ({
@@ -805,107 +427,67 @@ function Game() {
       guess: playerGuess,
       correct,
     }) => {
-      setGuessMessages(
-        (messages) => [
-          ...messages,
-          {
-            type: correct
-              ? "correct"
-              : "guess",
-            playerName,
-            guess: playerGuess,
-          },
-        ]
-      )
+      setGuessMessages((messages) => [
+        ...messages,
+        {
+          type: correct ? "correct" : "guess",
+          playerName,
+          guess: playerGuess,
+        },
+      ])
     }
 
-    const handleCorrectGuess = ({
-      score,
-    }) => {
-      setHasGuessedCorrectly(
-        true
-      )
-
+    const handleCorrectGuess = ({ score }) => {
+      setHasGuessedCorrectly(true)
       setScorePopup(score)
 
-      if (
-        scorePopupTimerRef.current
-      ) {
-        clearTimeout(
-          scorePopupTimerRef.current
-        )
-      }
+      clearTimeout(scorePopupTimerRef.current)
 
-      scorePopupTimerRef.current =
-        setTimeout(() => {
-          setScorePopup(null)
-
-          scorePopupTimerRef.current =
-            null
-        }, 2000)
+      scorePopupTimerRef.current = setTimeout(() => {
+        setScorePopup(null)
+        scorePopupTimerRef.current = null
+      }, 2000)
     }
 
-    const handlePlayerGuessedCorrectly =
-      ({
-        playerId,
-        playerName,
-      }) => {
-        setGuessMessages(
-          (messages) => {
-            const alreadyShown =
-              messages.some(
-                (message) =>
-                  message.type ===
-                    "correct" &&
-                  message.playerId ===
-                    playerId
-              )
-
-            if (alreadyShown) {
-              return messages
-            }
-
-            return [
-              ...messages,
-              {
-                type: "correct",
-                playerId,
-                playerName,
-              },
-            ]
-          }
+    const handlePlayerGuessedCorrectly = ({
+      playerId,
+      playerName,
+    }) => {
+      setGuessMessages((messages) => {
+        const exists = messages.some(
+          (message) =>
+            message.type === "correct" &&
+            message.playerId === playerId
         )
-      }
+
+        if (exists) return messages
+
+        return [
+          ...messages,
+          {
+            type: "correct",
+            playerId,
+            playerName,
+          },
+        ]
+      })
+    }
 
     const handlePlayersUpdated = ({
-      players:
-        updatedPlayers,
+      players: updatedPlayers,
     }) => {
-      if (
-        !Array.isArray(
-          updatedPlayers
-        )
-      ) {
-        return
+      if (Array.isArray(updatedPlayers)) {
+        setPlayers(updatedPlayers)
       }
-
-      setPlayers(
-        updatedPlayers
-      )
     }
 
     const handleGameFinished = ({
-      room:
-        finishedRoom,
+      room: finishedRoom,
     }) => {
       stopLocalTimer()
+      isDrawingRef.current = false
 
-      isDrawingRef.current =
-        false
-
-      if (!finishedRoom) {
-        return
-      }
+      if (!finishedRoom) return
 
       navigate("/score", {
         state: {
@@ -914,249 +496,85 @@ function Game() {
       })
     }
 
-    const handleRoomError = ({
-      message,
-    }) => {
-      console.error(
-        "Room error:",
-        message
-      )
+    const handleRoomError = ({ message }) => {
+      console.error("Room error:", message)
 
-      selectingWordRef.current =
-        false
-
+      selectingWordRef.current = false
       setWordChoices([])
-
       setScorePopup(null)
     }
 
-    socket.on(
-      "draw",
-      handleRemoteDraw
-    )
+    const events = {
+      draw: handleRemoteDraw,
+      clearCanvas: handleRemoteClear,
+      roundChoosing: handleRoundChoosing,
+      roundTransition: handleRoundTransition,
+      wordChoices: handleWordChoices,
+      roundStarted: handleRoundStarted,
+      artistWord: handleArtistWord,
+      playerGuess: handlePlayerGuess,
+      correctGuess: handleCorrectGuess,
+      playerGuessedCorrectly:
+        handlePlayerGuessedCorrectly,
+      playersUpdated: handlePlayersUpdated,
+      gameFinished: handleGameFinished,
+      roomError: handleRoomError,
+    }
 
-    socket.on(
-      "clearCanvas",
-      handleRemoteClear
-    )
-
-    socket.on(
-      "roundChoosing",
-      handleRoundChoosing
-    )
-
-    socket.on(
-      "wordChoices",
-      handleWordChoices
-    )
-
-    socket.on(
-      "roundStarted",
-      handleRoundStarted
-    )
-
-    socket.on(
-      "artistWord",
-      handleArtistWord
-    )
-
-    socket.on(
-      "playerGuess",
-      handlePlayerGuess
-    )
-
-    socket.on(
-      "correctGuess",
-      handleCorrectGuess
-    )
-
-    socket.on(
-      "playerGuessedCorrectly",
-      handlePlayerGuessedCorrectly
-    )
-
-    socket.on(
-      "playersUpdated",
-      handlePlayersUpdated
-    )
-
-    socket.on(
-      "gameFinished",
-      handleGameFinished
-    )
-
-    socket.on(
-      "roomError",
-      handleRoomError
+    Object.entries(events).forEach(
+      ([event, handler]) => {
+        socket.on(event, handler)
+      }
     )
 
     return () => {
-      socket.off(
-        "draw",
-        handleRemoteDraw
-      )
-
-      socket.off(
-        "clearCanvas",
-        handleRemoteClear
-      )
-
-      socket.off(
-        "roundChoosing",
-        handleRoundChoosing
-      )
-
-      socket.off(
-        "wordChoices",
-        handleWordChoices
-      )
-
-      socket.off(
-        "roundStarted",
-        handleRoundStarted
-      )
-
-      socket.off(
-        "artistWord",
-        handleArtistWord
-      )
-
-      socket.off(
-        "playerGuess",
-        handlePlayerGuess
-      )
-
-      socket.off(
-        "correctGuess",
-        handleCorrectGuess
-      )
-
-      socket.off(
-        "playerGuessedCorrectly",
-        handlePlayerGuessedCorrectly
-      )
-
-      socket.off(
-        "playersUpdated",
-        handlePlayersUpdated
-      )
-
-      socket.off(
-        "gameFinished",
-        handleGameFinished
-      )
-
-      socket.off(
-        "roomError",
-        handleRoomError
+      Object.entries(events).forEach(
+        ([event, handler]) => {
+          socket.off(event, handler)
+        }
       )
 
       stopLocalTimer()
-
-      if (
-        scorePopupTimerRef.current
-      ) {
-        clearTimeout(
-          scorePopupTimerRef.current
-        )
-
-        scorePopupTimerRef.current =
-          null
-      }
+      clearTimeout(scorePopupTimerRef.current)
     }
-  }, [
-    room?.code,
-    navigate,
-  ])
+  }, [room?.code, navigate])
 
-  /*
-   * =========================
-   * Select word
-   * =========================
-   */
-
-  const handleSelectWord = (
-    choice
-  ) => {
-    if (!isArtist) {
-      return
-    }
-
+  const handleSelectWord = (choice) => {
     if (
-      phaseRef.current !==
-      "choosing"
+      !isArtist ||
+      phaseRef.current !== "choosing" ||
+      !choice?.word ||
+      selectingWordRef.current ||
+      !socket.connected
     ) {
       return
     }
 
-    if (!choice?.word) {
-      return
-    }
+    selectingWordRef.current = true
 
-    if (
-      selectingWordRef.current
-    ) {
-      return
-    }
-
-    if (!socket.connected) {
-      console.warn(
-        "Socket is not connected"
-      )
-
-      return
-    }
-
-    selectingWordRef.current =
-      true
-
-    console.log(
-      "Selected word:",
-      choice.word
-    )
-
-    socket.emit(
-      "selectWord",
-      {
-        word: choice.word,
-        hint: choice.hint,
-      }
-    )
+    socket.emit("selectWord", {
+      word: choice.word,
+      hint: choice.hint,
+    })
 
     setWordChoices([])
   }
 
-  /*
-   * =========================
-   * Canvas history
-   * =========================
-   */
-
   const saveCanvasState = () => {
-    const canvas =
-      canvasRef.current
-
-    if (!canvas) {
-      return
-    }
+    const canvas = canvasRef.current
+    if (!canvas) return
 
     try {
       undoStackRef.current.push(
         canvas.toDataURL()
       )
 
-      if (
-        undoStackRef.current
-          .length > 30
-      ) {
+      if (undoStackRef.current.length > 30) {
         undoStackRef.current.shift()
       }
 
       redoStackRef.current = []
-
-      setHistoryVersion(
-        (value) => value + 1
-      )
+      setHistoryVersion((value) => value + 1)
     } catch (error) {
       console.error(
         "Could not save canvas state:",
@@ -1165,58 +583,31 @@ function Game() {
     }
   }
 
-  const restoreCanvasState = (
-    dataUrl
-  ) => {
-    const canvas =
-      canvasRef.current
-
-    if (!canvas || !dataUrl) {
-      return
-    }
+  const restoreCanvasState = (dataUrl) => {
+    const canvas = canvasRef.current
+    if (!canvas || !dataUrl) return
 
     const image = new Image()
 
     image.onload = () => {
-      const context =
-        canvas.getContext("2d")
+      const context = canvas.getContext("2d")
+      if (!context) return
 
-      if (!context) {
+      const rect = canvas.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
         return
       }
 
-      const rect =
-        canvas.getBoundingClientRect()
-
-      if (
-        rect.width <= 0 ||
-        rect.height <= 0
-      ) {
-        return
-      }
-
-      const dpr =
-        window.devicePixelRatio ||
-        1
+      const dpr = window.devicePixelRatio || 1
 
       context.save()
-
-      context.setTransform(
-        1,
-        0,
-        0,
-        1,
-        0,
-        0
-      )
-
+      context.setTransform(1, 0, 0, 1, 0, 0)
       context.clearRect(
         0,
         0,
         canvas.width,
         canvas.height
       )
-
       context.restore()
 
       context.setTransform(
@@ -1249,359 +640,181 @@ function Game() {
   const handleUndo = () => {
     if (
       !isArtist ||
-      phaseRef.current !==
-        "drawing"
+      phaseRef.current !== "drawing" ||
+      undoStackRef.current.length === 0
     ) {
       return
     }
 
-    const canvas =
-      canvasRef.current
-
-    if (!canvas) {
-      return
-    }
-
-    if (
-      undoStackRef.current
-        .length === 0
-    ) {
-      return
-    }
+    const canvas = canvasRef.current
+    if (!canvas) return
 
     redoStackRef.current.push(
       canvas.toDataURL()
     )
 
-    const previous =
+    restoreCanvasState(
       undoStackRef.current.pop()
-
-    if (previous) {
-      restoreCanvasState(
-        previous
-      )
-    }
-
-    setHistoryVersion(
-      (value) => value + 1
     )
+
+    setHistoryVersion((value) => value + 1)
   }
 
   const handleRedo = () => {
     if (
       !isArtist ||
-      phaseRef.current !==
-        "drawing"
+      phaseRef.current !== "drawing" ||
+      redoStackRef.current.length === 0
     ) {
       return
     }
 
-    const canvas =
-      canvasRef.current
-
-    if (!canvas) {
-      return
-    }
-
-    if (
-      redoStackRef.current
-        .length === 0
-    ) {
-      return
-    }
+    const canvas = canvasRef.current
+    if (!canvas) return
 
     undoStackRef.current.push(
       canvas.toDataURL()
     )
 
-    const next =
+    restoreCanvasState(
       redoStackRef.current.pop()
-
-    if (next) {
-      restoreCanvasState(next)
-    }
-
-    setHistoryVersion(
-      (value) => value + 1
     )
+
+    setHistoryVersion((value) => value + 1)
   }
 
-  /*
-   * =========================
-   * Pointer helpers
-   * =========================
-   */
+  const getPointerPosition = (event) => {
+    const canvas = canvasRef.current
+    if (!canvas) return null
 
-  const getPointerPosition = (
-    event
-  ) => {
-    const canvas =
-      canvasRef.current
+    const rect = canvas.getBoundingClientRect()
 
-    if (!canvas) {
-      return null
-    }
-
-    const rect =
-      canvas.getBoundingClientRect()
-
-    if (
-      rect.width <= 0 ||
-      rect.height <= 0
-    ) {
+    if (rect.width <= 0 || rect.height <= 0) {
       return null
     }
 
     return {
-      x:
-        event.clientX -
-        rect.left,
-      y:
-        event.clientY -
-        rect.top,
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
     }
   }
 
-  /*
-   * =========================
-   * Pointer down
-   * =========================
-   */
+  const normalizePoint = (position, rect) => ({
+    x: Math.max(
+      0,
+      Math.min(1, position.x / rect.width)
+    ),
+    y: Math.max(
+      0,
+      Math.min(1, position.y / rect.height)
+    ),
+  })
 
-  const handlePointerDown = (
-    event
-  ) => {
-    if (!isArtist) {
+  const emitDraw = (data) => {
+    if (!socket.connected || !room?.code) {
       return
     }
 
+    socket.emit("draw", {
+      roomCode: room.code,
+      ...data,
+    })
+  }
+
+  const handlePointerDown = (event) => {
     if (
-      phaseRef.current !==
-      "drawing"
+      !isArtist ||
+      phaseRef.current !== "drawing" ||
+      !["draw", "eraser"].includes(tool)
     ) {
       return
     }
 
-    if (
-      tool !== "draw" &&
-      tool !== "eraser"
-    ) {
-      return
-    }
+    const canvas = canvasRef.current
+    const position = getPointerPosition(event)
 
-    const canvas =
-      canvasRef.current
-
-    if (!canvas) {
-      return
-    }
-
-    const position =
-      getPointerPosition(event)
-
-    if (!position) {
-      return
-    }
+    if (!canvas || !position) return
 
     saveCanvasState()
 
     try {
-      canvas.setPointerCapture(
-        event.pointerId
-      )
-    } catch {
-      // Ignore pointer capture errors.
-    }
+      canvas.setPointerCapture(event.pointerId)
+    } catch {}
 
-    isDrawingRef.current =
-      true
+    isDrawingRef.current = true
+    lastPositionRef.current = position
 
-    lastPositionRef.current =
-      position
+    const rect = canvas.getBoundingClientRect()
+    const point = normalizePoint(position, rect)
 
-    const rect =
-      canvas.getBoundingClientRect()
-
-    const x = Math.max(
-      0,
-      Math.min(
-        1,
-        position.x /
-          rect.width
-      )
-    )
-
-    const y = Math.max(
-      0,
-      Math.min(
-        1,
-        position.y /
-          rect.height
-      )
-    )
-
-    const dotData = {
-      x0: x,
-      y0: y,
-      x1: x + 0.00001,
-      y1: y + 0.00001,
-      color:
-        selectedColor,
+    const data = {
+      x0: point.x,
+      y0: point.y,
+      x1: point.x + 0.00001,
+      y1: point.y + 0.00001,
+      color: selectedColor,
       size: brushSize,
       tool,
     }
 
-    drawLine(dotData)
-
-    if (
-      socket.connected &&
-      room?.code
-    ) {
-      socket.emit("draw", {
-        roomCode:
-          room.code,
-        ...dotData,
-      })
-    }
+    drawLine(data)
+    emitDraw(data)
   }
 
-  /*
-   * =========================
-   * Pointer move
-   * =========================
-   */
-
-  const handlePointerMove = (
-    event
-  ) => {
+  const handlePointerMove = (event) => {
     if (
-      !isDrawingRef.current
+      !isDrawingRef.current ||
+      !isArtist ||
+      phaseRef.current !== "drawing"
     ) {
-      return
-    }
-
-    if (!isArtist) {
-      return
-    }
-
-    if (
-      phaseRef.current !==
-      "drawing"
-    ) {
-      isDrawingRef.current =
-        false
+      if (
+        phaseRef.current !== "drawing"
+      ) {
+        isDrawingRef.current = false
+      }
 
       return
     }
 
-    const canvas =
-      canvasRef.current
+    const canvas = canvasRef.current
+    const position = getPointerPosition(event)
 
-    if (!canvas) {
-      return
-    }
+    if (!canvas || !position) return
 
-    const position =
-      getPointerPosition(event)
-
-    if (!position) {
-      return
-    }
-
-    const rect =
-      canvas.getBoundingClientRect()
-
-    const previous =
-      lastPositionRef.current
-
-    const x0 = Math.max(
-      0,
-      Math.min(
-        1,
-        previous.x /
-          rect.width
-      )
+    const rect = canvas.getBoundingClientRect()
+    const previous = normalizePoint(
+      lastPositionRef.current,
+      rect
+    )
+    const current = normalizePoint(
+      position,
+      rect
     )
 
-    const y0 = Math.max(
-      0,
-      Math.min(
-        1,
-        previous.y /
-          rect.height
-      )
-    )
-
-    const x1 = Math.max(
-      0,
-      Math.min(
-        1,
-        position.x /
-          rect.width
-      )
-    )
-
-    const y1 = Math.max(
-      0,
-      Math.min(
-        1,
-        position.y /
-          rect.height
-      )
-    )
-
-    const drawingData = {
-      x0,
-      y0,
-      x1,
-      y1,
-      color:
-        selectedColor,
+    const data = {
+      x0: previous.x,
+      y0: previous.y,
+      x1: current.x,
+      y1: current.y,
+      color: selectedColor,
       size: brushSize,
       tool,
     }
 
-    drawLine(
-      drawingData
-    )
+    drawLine(data)
+    emitDraw(data)
 
-    if (
-      socket.connected &&
-      room?.code
-    ) {
-      socket.emit("draw", {
-        roomCode:
-          room.code,
-        ...drawingData,
-      })
-    }
-
-    lastPositionRef.current =
-      position
+    lastPositionRef.current = position
   }
 
-  /*
-   * =========================
-   * Pointer up
-   * =========================
-   */
+  const handlePointerUp = (event) => {
+    isDrawingRef.current = false
 
-  const handlePointerUp = (
-    event
-  ) => {
-    isDrawingRef.current =
-      false
-
-    const canvas =
-      canvasRef.current
-
-    if (!canvas) {
-      return
-    }
+    const canvas = canvasRef.current
+    if (!canvas) return
 
     if (
-      event?.pointerId !==
-      undefined
+      event?.pointerId !== undefined
     ) {
       try {
         if (
@@ -1613,57 +826,30 @@ function Game() {
             event.pointerId
           )
         }
-      } catch {
-        // Ignore pointer capture errors.
-      }
+      } catch {}
     }
   }
 
-  /*
-   * =========================
-   * Clear canvas
-   * =========================
-   */
-
   const handleClear = () => {
-    if (!isArtist) {
-      return
-    }
-
     if (
-      phaseRef.current !==
-      "drawing"
+      !isArtist ||
+      phaseRef.current !== "drawing"
     ) {
       return
     }
 
     saveCanvasState()
-
     clearLocalCanvas()
 
-    if (
-      socket.connected &&
-      room?.code
-    ) {
-      socket.emit(
-        "clearCanvas"
-      )
+    if (socket.connected) {
+      socket.emit("clearCanvas")
     }
   }
 
-  /*
-   * =========================
-   * Tools
-   * =========================
-   */
-
-  const handleColorChange = (
-    color
-  ) => {
+  const handleColorChange = (color) => {
     if (
       !isArtist ||
-      phaseRef.current !==
-        "drawing"
+      phaseRef.current !== "drawing"
     ) {
       return
     }
@@ -1674,66 +860,35 @@ function Game() {
 
   const handleDraw = () => {
     if (
-      !isArtist ||
-      phaseRef.current !==
-        "drawing"
+      isArtist &&
+      phaseRef.current === "drawing"
     ) {
-      return
+      setTool("draw")
     }
-
-    setTool("draw")
   }
 
   const handleEraser = () => {
     if (
-      !isArtist ||
-      phaseRef.current !==
-        "drawing"
+      isArtist &&
+      phaseRef.current === "drawing"
     ) {
-      return
+      setTool("eraser")
     }
-
-    setTool("eraser")
   }
 
-  /*
-   * =========================
-   * Guess
-   * =========================
-   */
-
-  const handleGuessSubmit = (
-    event
-  ) => {
+  const handleGuessSubmit = (event) => {
     event.preventDefault()
 
-    const cleanGuess =
-      guess.trim()
-
-    if (!cleanGuess) {
-      return
-    }
-
-    if (!socket.connected) {
-      return
-    }
-
-    if (isArtist) {
-      return
-    }
+    const cleanGuess = guess.trim()
 
     if (
-      phaseRef.current !==
-      "drawing"
+      !cleanGuess ||
+      !socket.connected ||
+      isArtist ||
+      phaseRef.current !== "drawing" ||
+      hasGuessedCorrectly ||
+      timeRemaining <= 0
     ) {
-      return
-    }
-
-    if (hasGuessedCorrectly) {
-      return
-    }
-
-    if (timeRemaining <= 0) {
       return
     }
 
@@ -1744,60 +899,25 @@ function Game() {
     setGuess("")
   }
 
-  /*
-   * =========================
-   * Leave
-   * =========================
-   */
-
   const handleLeave = () => {
     stopLocalTimer()
-
-    isDrawingRef.current =
-      false
+    isDrawingRef.current = false
 
     if (socket.connected) {
-      socket.emit(
-        "leaveRoom"
-      )
-
+      socket.emit("leaveRoom")
       socket.disconnect()
     }
 
     navigate("/room")
   }
 
-  /*
-   * =========================
-   * Cleanup
-   * =========================
-   */
-
   useEffect(() => {
     return () => {
       stopLocalTimer()
-
-      if (
-        scorePopupTimerRef.current
-      ) {
-        clearTimeout(
-          scorePopupTimerRef.current
-        )
-
-        scorePopupTimerRef.current =
-          null
-      }
-
-      isDrawingRef.current =
-        false
+      clearTimeout(scorePopupTimerRef.current)
+      isDrawingRef.current = false
     }
   }, [])
-
-  /*
-   * =========================
-   * No room
-   * =========================
-   */
 
   if (!room) {
     return (
@@ -1813,9 +933,7 @@ function Game() {
 
           <button
             type="button"
-            onClick={() =>
-              navigate("/room")
-            }
+            onClick={() => navigate("/room")}
             className="mt-5 rounded-full border-[3px] border-[#222] bg-[#e0f878] px-6 py-3 font-extrabold transition hover:bg-[#d0e868]"
           >
             Back to Room
@@ -1825,18 +943,11 @@ function Game() {
     )
   }
 
-  /*
-   * =========================
-   * Render
-   * =========================
-   */
-
   return (
     <div className="min-h-screen bg-[#f4f5f5] text-[#222]">
       {scorePopup !== null && (
         <div className="pointer-events-none fixed left-1/2 top-24 z-50 -translate-x-1/2 rounded-full border-[3px] border-[#222] bg-[#e0f878] px-6 py-3 text-xl font-extrabold shadow-[0_4px_0_#222]">
-          🎉 Correct! +
-          {scorePopup} pts
+          🎉 Correct! +{scorePopup} pts
         </div>
       )}
 
@@ -1867,7 +978,6 @@ function Game() {
 
             <p className="text-2xl font-medium">
               Round {currentRound}
-
               <span className="text-lg text-[#666]">
                 {" "}
                 of {room.rounds}
@@ -1877,8 +987,7 @@ function Game() {
         </div>
 
         <div className="rounded-[16px] border-[3px] border-[#111] bg-white px-6 py-3 text-center shadow-[0_4px_0_#111] md:px-10">
-          {phase ===
-          "choosing" ? (
+          {phase === "choosing" ? (
             <>
               <p className="text-xs font-bold">
                 {isArtist
@@ -1892,6 +1001,16 @@ function Game() {
                   : "Choosing word..."}
               </p>
             </>
+          ) : phase === "transitioning" ? (
+            <>
+              <p className="text-xs font-bold">
+                NEXT TURN
+              </p>
+
+              <p className="text-xl font-extrabold">
+                Get ready...
+              </p>
+            </>
           ) : (
             <>
               <p className="text-xs font-bold">
@@ -1902,10 +1021,8 @@ function Game() {
 
               <p className="max-w-[360px] truncate text-2xl font-extrabold">
                 {isArtist
-                  ? currentWord ||
-                    "Loading..."
-                  : wordPattern ||
-                    "＿"}
+                  ? currentWord || "Loading..."
+                  : wordPattern || "＿"}
               </p>
             </>
           )}
@@ -1914,30 +1031,31 @@ function Game() {
         <div className="flex items-center justify-self-start gap-4 rounded-full border-2 border-[#111] bg-white px-5 py-2 shadow-[0_3px_0_#d4d4d4] md:justify-self-end">
           <div
             className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold text-white ${
-              phase === "choosing"
+              phase === "choosing" ||
+              phase === "transitioning"
                 ? "bg-[#999]"
                 : timeRemaining <= 5
                   ? "bg-[#c62828]"
                   : "bg-[#111]"
             }`}
           >
-            {phase ===
-            "choosing"
+            {phase === "choosing" ||
+            phase === "transitioning"
               ? "—"
               : timeRemaining}
           </div>
 
           <div>
             <p className="text-xs tracking-wide text-[#666]">
-              {phase ===
-              "choosing"
-                ? "WORD SELECTION"
+              {phase === "choosing" ||
+              phase === "transitioning"
+                ? "ROUND TRANSITION"
                 : "TIME REMAINING"}
             </p>
 
             <p className="text-xl font-medium">
-              {phase ===
-              "choosing"
+              {phase === "choosing" ||
+              phase === "transitioning"
                 ? "Waiting"
                 : `${timeRemaining}s`}
             </p>
@@ -1945,74 +1063,62 @@ function Game() {
         </div>
       </section>
 
-      {phase ===
-        "choosing" &&
-        isArtist && (
-          <section className="mx-6 mb-4 rounded-[24px] border-[3px] border-[#111] bg-[#e8f79c] p-6 shadow-[0_4px_0_#111]">
-            <div className="mb-5 text-center">
-              <p className="text-sm font-bold tracking-wider text-[#666]">
-                YOUR TURN TO DRAW
-              </p>
-
-              <h2 className="mt-1 text-3xl font-extrabold">
-                Choose a word
-              </h2>
-
-              <p className="mt-1 text-sm text-[#666]">
-                Everyone will guess the
-                word you choose.
-              </p>
-            </div>
-
-            <div className="mx-auto grid max-w-[900px] grid-cols-1 gap-4 md:grid-cols-3">
-              {wordChoices.map(
-                (choice) => (
-                  <button
-                    key={
-                      choice.word
-                    }
-                    type="button"
-                    disabled={
-                      selectingWordRef.current
-                    }
-                    onClick={() =>
-                      handleSelectWord(
-                        choice
-                      )
-                    }
-                    className="rounded-[18px] border-[3px] border-[#111] bg-white px-5 py-6 text-center font-extrabold shadow-[0_4px_0_#111] transition hover:-translate-y-1 hover:bg-[#f7f7f7] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <p className="text-xl">
-                      {choice.word}
-                    </p>
-
-                    <p className="mt-2 text-sm font-medium text-[#666]">
-                      {choice.hint}
-                    </p>
-                  </button>
-                )
-              )}
-            </div>
-          </section>
-        )}
-
-      {phase ===
-        "choosing" &&
-        !isArtist && (
-          <section className="mx-6 mb-4 rounded-[24px] border-[3px] border-[#111] bg-white p-6 text-center shadow-[0_4px_0_#111]">
-            <p className="text-4xl">
-              🎨
+      {phase === "choosing" && isArtist && (
+        <section className="mx-6 mb-4 rounded-[24px] border-[3px] border-[#111] bg-[#e8f79c] p-6 shadow-[0_4px_0_#111]">
+          <div className="mb-5 text-center">
+            <p className="text-sm font-bold tracking-wider text-[#666]">
+              YOUR TURN TO DRAW
             </p>
 
-            <h2 className="mt-2 text-2xl font-extrabold">
-              The artist is choosing a word...
+            <h2 className="mt-1 text-3xl font-extrabold">
+              Choose a word
             </h2>
 
             <p className="mt-1 text-sm text-[#666]">
-              Get ready to guess!
+              Everyone will guess the word you
+              choose.
             </p>
-          </section>
-        )}
+          </div>
+
+          <div className="mx-auto grid max-w-[900px] grid-cols-1 gap-4 md:grid-cols-3">
+            {wordChoices.map((choice) => (
+              <button
+                key={choice.word}
+                type="button"
+                disabled={
+                  selectingWordRef.current
+                }
+                onClick={() =>
+                  handleSelectWord(choice)
+                }
+                className="rounded-[18px] border-[3px] border-[#111] bg-white px-5 py-6 text-center font-extrabold shadow-[0_4px_0_#111] transition hover:-translate-y-1 hover:bg-[#f7f7f7] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <p className="text-xl">
+                  {choice.word}
+                </p>
+
+                <p className="mt-2 text-sm font-medium text-[#666]">
+                  {choice.hint}
+                </p>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {phase === "choosing" && !isArtist && (
+        <section className="mx-6 mb-4 rounded-[24px] border-[3px] border-[#111] bg-white p-6 text-center shadow-[0_4px_0_#111]">
+          <p className="text-4xl">🎨</p>
+
+          <h2 className="mt-2 text-2xl font-extrabold">
+            The artist is choosing a word...
+          </h2>
+
+          <p className="mt-1 text-sm text-[#666]">
+            Get ready to guess!
+          </p>
+        </section>
+      )}
 
       <main className="grid gap-5 px-6 pb-8 md:px-8 lg:grid-cols-[220px_minmax(0,1fr)_280px]">
         <aside className="rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
@@ -2022,252 +1128,198 @@ function Game() {
             </h2>
 
             <span className="rounded-full bg-[#eee] px-3 py-1 text-xs font-bold">
-              {players.length}/
-              {room.maxPlayers}
+              {players.length}/{room.maxPlayers}
             </span>
           </div>
 
           <div className="flex flex-col gap-2">
-            {players.map(
-              (player) => {
-                const playerIsArtist =
-                  player.id ===
-                  artistId
+            {players.map((player) => {
+              const playerIsArtist =
+                player.id === artistId
 
-                return (
-                  <div
-                    key={
-                      player.id
-                    }
-                    className={`flex items-center justify-between rounded-[12px] border-2 border-[#222] px-3 py-3 ${
-                      playerIsArtist
-                        ? "bg-[#e8f79c]"
-                        : "bg-[#fafafa]"
-                    }`}
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#eee]">
-                        🐱
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-extrabold">
-                          {player.name}
-                        </p>
-
-                        <p className="text-xs text-[#777]">
-                          {playerIsArtist
-                            ? "Artist"
-                            : "Player"}
-                        </p>
-                      </div>
+              return (
+                <div
+                  key={player.id}
+                  className={`flex items-center justify-between rounded-[12px] border-2 border-[#222] px-3 py-3 ${
+                    playerIsArtist
+                      ? "bg-[#e8f79c]"
+                      : "bg-[#fafafa]"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#eee]">
+                      🐱
                     </div>
 
-                    <span className="ml-2 shrink-0 text-sm font-extrabold">
-                      {player.score ||
-                        0}
-                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-extrabold">
+                        {player.name}
+                      </p>
+
+                      <p className="text-xs text-[#777]">
+                        {playerIsArtist
+                          ? "Artist"
+                          : "Player"}
+                      </p>
+                    </div>
                   </div>
-                )
-              }
-            )}
+
+                  <span className="ml-2 shrink-0 text-sm font-extrabold">
+                    {player.score || 0}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </aside>
 
         <section className="min-w-0">
           <div
-            ref={
-              canvasContainerRef
-            }
+            ref={canvasContainerRef}
             className="relative aspect-[4/3] min-h-[400px] w-full overflow-hidden rounded-[20px] border-[3px] border-[#111] bg-white shadow-[0_4px_0_#111]"
           >
             <canvas
               ref={canvasRef}
               className={`block h-full w-full touch-none ${
-                isArtist &&
-                phase === "drawing"
+                isArtist && phase === "drawing"
                   ? "cursor-crosshair"
                   : "cursor-default"
               }`}
-              onPointerDown={
-                handlePointerDown
-              }
-              onPointerMove={
-                handlePointerMove
-              }
-              onPointerUp={
-                handlePointerUp
-              }
-              onPointerCancel={
-                handlePointerUp
-              }
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
             />
 
-            {phase ===
-              "drawing" &&
-              !isArtist && (
-                <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full border-2 border-[#111] bg-white px-5 py-2 text-sm font-bold shadow-[0_3px_0_#111]">
-                  Hint: {hint}
-                </div>
-              )}
-          </div>
-
-          {isArtist &&
-            phase ===
-              "drawing" && (
-              <div className="mt-4 rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={
-                        handleDraw
-                      }
-                      className={`flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-[#111] text-lg ${
-                        tool ===
-                        "draw"
-                          ? "bg-[#e0f878]"
-                          : "bg-white"
-                      }`}
-                    >
-                      ✏️
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={
-                        handleEraser
-                      }
-                      className={`flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-[#111] text-lg ${
-                        tool ===
-                        "eraser"
-                          ? "bg-[#e0f878]"
-                          : "bg-white"
-                      }`}
-                    >
-                      🧹
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-extrabold">
-                      Size
-                    </span>
-
-                    {[4, 8, 14, 20].map(
-                      (size) => (
-                        <button
-                          key={size}
-                          type="button"
-                          onClick={() =>
-                            setBrushSize(
-                              size
-                            )
-                          }
-                          className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#111] ${
-                            brushSize ===
-                            size
-                              ? "bg-[#e0f878]"
-                              : "bg-white"
-                          }`}
-                        >
-                          <span
-                            className="block rounded-full bg-[#111]"
-                            style={{
-                              width: `${Math.min(
-                                size,
-                                18
-                              )}px`,
-                              height: `${Math.min(
-                                size,
-                                18
-                              )}px`,
-                            }}
-                          />
-                        </button>
-                      )
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {colors.map(
-                      (color) => (
-                        <button
-                          key={
-                            color
-                          }
-                          type="button"
-                          onClick={() =>
-                            handleColorChange(
-                              color
-                            )
-                          }
-                          className={`h-8 w-8 rounded-full border-2 border-[#111] ${
-                            selectedColor ===
-                              color &&
-                            tool ===
-                              "draw"
-                              ? "ring-2 ring-[#111] ring-offset-2"
-                              : ""
-                          }`}
-                          style={{
-                            backgroundColor:
-                              color,
-                          }}
-                          aria-label={`Color ${color}`}
-                        />
-                      )
-                    )}
-                  </div>
-
-                  <div className="ml-auto flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={
-                        undoStackRef.current
-                          .length ===
-                          0 ||
-                        historyVersion <
-                          0
-                      }
-                      onClick={
-                        handleUndo
-                      }
-                      className="rounded-full border-[3px] border-[#111] bg-white px-4 py-2 font-extrabold transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Undo
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={
-                        redoStackRef.current
-                          .length ===
-                          0 ||
-                        historyVersion <
-                          0
-                      }
-                      onClick={
-                        handleRedo
-                      }
-                      className="rounded-full border-[3px] border-[#111] bg-white px-4 py-2 font-extrabold transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Redo
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={
-                        handleClear
-                      }
-                      className="rounded-full border-[3px] border-[#111] bg-[#f3d0d0] px-4 py-2 font-extrabold transition hover:bg-[#eabbbb]"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                </div>
+            {phase === "drawing" && !isArtist && (
+              <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full border-2 border-[#111] bg-white px-5 py-2 text-sm font-bold shadow-[0_3px_0_#111]">
+                Hint: {hint}
               </div>
             )}
+          </div>
+
+          {isArtist && phase === "drawing" && (
+            <div className="mt-4 rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDraw}
+                    className={`flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-[#111] text-lg ${
+                      tool === "draw"
+                        ? "bg-[#e0f878]"
+                        : "bg-white"
+                    }`}
+                  >
+                    ✏️
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleEraser}
+                    className={`flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-[#111] text-lg ${
+                      tool === "eraser"
+                        ? "bg-[#e0f878]"
+                        : "bg-white"
+                    }`}
+                  >
+                    🧹
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-extrabold">
+                    Size
+                  </span>
+
+                  {[4, 8, 14, 20].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() =>
+                        setBrushSize(size)
+                      }
+                      className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#111] ${
+                        brushSize === size
+                          ? "bg-[#e0f878]"
+                          : "bg-white"
+                      }`}
+                    >
+                      <span
+                        className="block rounded-full bg-[#111]"
+                        style={{
+                          width: `${Math.min(
+                            size,
+                            18
+                          )}px`,
+                          height: `${Math.min(
+                            size,
+                            18
+                          )}px`,
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {colors.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() =>
+                        handleColorChange(color)
+                      }
+                      className={`h-8 w-8 rounded-full border-2 border-[#111] ${
+                        selectedColor === color &&
+                        tool === "draw"
+                          ? "ring-2 ring-[#111] ring-offset-2"
+                          : ""
+                      }`}
+                      style={{
+                        backgroundColor: color,
+                      }}
+                      aria-label={`Color ${color}`}
+                    />
+                  ))}
+                </div>
+
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={
+                      undoStackRef.current.length ===
+                      0
+                    }
+                    onClick={handleUndo}
+                    className="rounded-full border-[3px] border-[#111] bg-white px-4 py-2 font-extrabold transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Undo
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={
+                      redoStackRef.current.length ===
+                      0
+                    }
+                    onClick={handleRedo}
+                    className="rounded-full border-[3px] border-[#111] bg-white px-4 py-2 font-extrabold transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Redo
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleClear}
+                    className="rounded-full border-[3px] border-[#111] bg-[#f3d0d0] px-4 py-2 font-extrabold transition hover:bg-[#eabbbb]"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
 
         <aside className="flex min-h-[500px] flex-col rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
@@ -2284,31 +1336,25 @@ function Game() {
           </div>
 
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-            {guessMessages.length ===
-              0 && (
+            {guessMessages.length === 0 && (
               <div className="rounded-[12px] bg-[#f4f4f4] px-3 py-4 text-center text-sm text-[#777]">
                 No guesses yet.
               </div>
             )}
 
             {guessMessages.map(
-              (
-                message,
-                index
-              ) => {
-                if (
-                  message.type ===
-                  "correct"
-                ) {
+              (message, index) => {
+                if (message.type === "correct") {
                   return (
                     <div
-                      key={`${message.playerId || message.playerName}-${index}`}
+                      key={`${
+                        message.playerId ||
+                        message.playerName
+                      }-${index}`}
                       className="rounded-[12px] bg-[#e8f79c] px-3 py-2 text-sm"
                     >
                       <span className="font-extrabold">
-                        {
-                          message.playerName
-                        }
+                        {message.playerName}
                       </span>{" "}
                       guessed correctly! 🎉
                     </div>
@@ -2321,14 +1367,9 @@ function Game() {
                     className="rounded-[12px] bg-[#f4f4f4] px-3 py-2 text-sm"
                   >
                     <span className="font-extrabold">
-                      {
-                        message.playerName
-                      }
+                      {message.playerName}
                     </span>
-                    :{" "}
-                    {
-                      message.guess
-                    }
+                    : {message.guess}
                   </div>
                 )
               }
@@ -2337,28 +1378,19 @@ function Game() {
 
           {!isArtist && (
             <form
-              onSubmit={
-                handleGuessSubmit
-              }
+              onSubmit={handleGuessSubmit}
               className="mt-4 flex gap-2"
             >
               <input
                 type="text"
                 value={guess}
-                onChange={(
-                  event
-                ) =>
-                  setGuess(
-                    event.target
-                      .value
-                  )
+                onChange={(event) =>
+                  setGuess(event.target.value)
                 }
                 disabled={
-                  phase !==
-                    "drawing" ||
+                  phase !== "drawing" ||
                   hasGuessedCorrectly ||
-                  timeRemaining <=
-                    0
+                  timeRemaining <= 0
                 }
                 placeholder={
                   hasGuessedCorrectly
@@ -2371,11 +1403,9 @@ function Game() {
               <button
                 type="submit"
                 disabled={
-                  phase !==
-                    "drawing" ||
+                  phase !== "drawing" ||
                   hasGuessedCorrectly ||
-                  timeRemaining <=
-                    0 ||
+                  timeRemaining <= 0 ||
                   !guess.trim()
                 }
                 className="rounded-full border-[3px] border-[#111] bg-[#e0f878] px-5 py-3 font-extrabold transition hover:bg-[#d0e868] disabled:cursor-not-allowed disabled:opacity-40"

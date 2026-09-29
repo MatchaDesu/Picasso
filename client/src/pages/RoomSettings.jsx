@@ -49,7 +49,10 @@ function RoomSettings() {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:3000/api/rooms", {
+      const SERVER_URL =
+        import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
+
+      const response = await fetch(`${SERVER_URL}/api/rooms`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
