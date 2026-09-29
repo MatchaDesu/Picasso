@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react"
+
 import {
   useLocation,
   useNavigate,
@@ -7,18 +12,12 @@ import {
 import socket from "../socket"
 
 function Game() {
-  const location =
-    useLocation()
+  const location = useLocation()
+  const navigate = useNavigate()
 
-  const navigate =
-    useNavigate()
+  const room = location.state?.room
 
-  const room =
-    location.state?.room
-
-  const canvasRef =
-    useRef(null)
-
+  const canvasRef = useRef(null)
   const canvasContainerRef =
     useRef(null)
 
@@ -26,10 +25,7 @@ function Game() {
     useRef(false)
 
   const lastPositionRef =
-    useRef({
-      x: 0,
-      y: 0,
-    })
+    useRef({ x: 0, y: 0 })
 
   const undoStackRef =
     useRef([])
@@ -37,72 +33,120 @@ function Game() {
   const redoStackRef =
     useRef([])
 
-  const timerRef =
+  const timerRef = useRef(null)
+
+  const scorePopupTimerRef =
     useRef(null)
 
-  const [selectedColor, setSelectedColor] =
-    useState("#1b1b1b")
+  const phaseRef = useRef(
+    room?.phase || "choosing"
+  )
 
-  const [brushSize, setBrushSize] =
-    useState(8)
+  const artistIdRef = useRef(
+    location.state?.artistId ||
+      room?.artistId ||
+      null
+  )
 
-  const [tool, setTool] =
-    useState("draw")
+  const selectingWordRef =
+    useRef(false)
 
-  const [artistId, setArtistId] =
-    useState(
-      location.state?.artistId ||
-        room?.artistId ||
-        null
-    )
+  const [
+    selectedColor,
+    setSelectedColor,
+  ] = useState("#1b1b1b")
 
-  const [currentRound, setCurrentRound] =
-    useState(
-      location.state?.currentRound ||
-        room?.currentRound ||
-        1
-    )
+  const [
+    brushSize,
+    setBrushSize,
+  ] = useState(8)
 
-  const [phase, setPhase] =
-    useState(
-      room?.phase ||
-        "choosing"
-    )
+  const [
+    tool,
+    setTool,
+  ] = useState("draw")
 
-  const [timeRemaining, setTimeRemaining] =
-    useState(
-      room?.drawingTime ||
-        60
-    )
+  const [
+    artistId,
+    setArtistId,
+  ] = useState(
+    location.state?.artistId ||
+      room?.artistId ||
+      null
+  )
 
-  const [currentWord, setCurrentWord] =
-    useState("")
+  const [
+    currentRound,
+    setCurrentRound,
+  ] = useState(
+    location.state?.currentRound ||
+      room?.currentRound ||
+      1
+  )
 
-  const [hint, setHint] =
-    useState("")
+  const [
+    phase,
+    setPhase,
+  ] = useState(
+    room?.phase || "choosing"
+  )
 
-  const [wordLength, setWordLength] =
-    useState(0)
+  const [
+    timeRemaining,
+    setTimeRemaining,
+  ] = useState(
+    room?.drawingTime || 60
+  )
 
-  const [wordChoices, setWordChoices] =
-    useState([])
+  const [
+    currentWord,
+    setCurrentWord,
+  ] = useState("")
 
-  const [guess, setGuess] =
-    useState("")
+  const [
+    hint,
+    setHint,
+  ] = useState("")
 
-  const [guessMessages, setGuessMessages] =
-    useState([])
+  const [
+    wordPattern,
+    setWordPattern,
+  ] = useState("")
 
-  const [hasGuessedCorrectly, setHasGuessedCorrectly] =
-    useState(false)
+  const [
+    wordChoices,
+    setWordChoices,
+  ] = useState([])
 
-  const [scorePopup, setScorePopup] =
-    useState(null)
+  const [
+    guess,
+    setGuess,
+  ] = useState("")
 
-  const [players, setPlayers] =
-    useState(
-      room?.players || []
-    )
+  const [
+    guessMessages,
+    setGuessMessages,
+  ] = useState([])
+
+  const [
+    hasGuessedCorrectly,
+    setHasGuessedCorrectly,
+  ] = useState(false)
+
+  const [
+    scorePopup,
+    setScorePopup,
+  ] = useState(null)
+
+  const [
+    players,
+    setPlayers,
+  ] = useState(room?.players || [])
+
+  const [
+    historyVersion,
+    setHistoryVersion,
+  ] = useState(0)
 
   const colors = [
     "#1b1b1b",
@@ -122,173 +166,251 @@ function Game() {
     "#8b7268",
   ]
 
-  /*
-  |--------------------------------------------------------------------------
-  | Current Player
-  |--------------------------------------------------------------------------
-  */
+  useEffect(() => {
+    phaseRef.current = phase
+  }, [phase])
+
+  useEffect(() => {
+    artistIdRef.current = artistId
+  }, [artistId])
 
   const currentPlayer =
     players.find(
       (player) =>
-        player.id ===
-        socket.id
+        player.id === socket.id
     )
 
   const isArtist =
-    currentPlayer?.id ===
-    artistId
+    currentPlayer?.id === artistId
 
   /*
-  |--------------------------------------------------------------------------
-  | Local Timer
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Canvas helpers
+   * =========================
+   */
 
-  const startLocalTimer = (
-    roundEndsAt
-  ) => {
-    if (
-      timerRef.current
-    ) {
-      clearInterval(
-        timerRef.current
-      )
+  const getCanvasContext = () => {
+    const canvas = canvasRef.current
+
+    if (!canvas) {
+      return null
     }
 
-    const updateTimer = () => {
-      const remainingMs =
-        roundEndsAt -
-        Date.now()
+    return canvas.getContext("2d")
+  }
 
-      const remainingSeconds =
-        Math.max(
-          0,
-          Math.ceil(
-            remainingMs /
-              1000
-          )
-        )
+  const setupCanvasContext = () => {
+    const canvas = canvasRef.current
 
-      setTimeRemaining(
-        remainingSeconds
-      )
+    if (!canvas) {
+      return null
     }
 
-    updateTimer()
+    const context =
+      canvas.getContext("2d")
 
-    timerRef.current =
-      setInterval(
-        updateTimer,
-        250
-      )
+    if (!context) {
+      return null
+    }
+
+    const dpr =
+      window.devicePixelRatio || 1
+
+    context.setTransform(
+      dpr,
+      0,
+      0,
+      dpr,
+      0,
+      0
+    )
+
+    context.lineCap = "round"
+    context.lineJoin = "round"
+
+    return context
+  }
+
+  const clearLocalCanvas = () => {
+    const canvas = canvasRef.current
+
+    if (!canvas) {
+      return
+    }
+
+    const context =
+      canvas.getContext("2d")
+
+    if (!context) {
+      return
+    }
+
+    context.save()
+
+    context.setTransform(
+      1,
+      0,
+      0,
+      1,
+      0,
+      0
+    )
+
+    context.clearRect(
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    )
+
+    context.restore()
+
+    setupCanvasContext()
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Canvas Resize
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Canvas resize
+   * =========================
+   */
 
   useEffect(() => {
-    const canvas =
-      canvasRef.current
-
+    const canvas = canvasRef.current
     const container =
       canvasContainerRef.current
 
-    if (
-      !canvas ||
-      !container
-    ) {
+    if (!canvas || !container) {
       return
     }
+
+    let previousCssWidth = 0
+    let previousCssHeight = 0
 
     const resizeCanvas = () => {
       const rect =
         container.getBoundingClientRect()
 
-      const oldCanvas =
-        document.createElement(
-          "canvas"
-        )
-
-      oldCanvas.width =
-        canvas.width
-
-      oldCanvas.height =
-        canvas.height
-
       if (
-        canvas.width > 0 &&
-        canvas.height > 0
+        rect.width <= 0 ||
+        rect.height <= 0
       ) {
-        const oldContext =
-          oldCanvas.getContext(
-            "2d"
-          )
-
-        oldContext.drawImage(
-          canvas,
-          0,
-          0
-        )
+        return
       }
 
-      const devicePixelRatio =
-        window.devicePixelRatio ||
-        1
+      const dpr =
+        window.devicePixelRatio || 1
 
-      canvas.width =
-        rect.width *
-        devicePixelRatio
+      const newCssWidth =
+        rect.width
 
-      canvas.height =
-        rect.height *
-        devicePixelRatio
+      const newCssHeight =
+        rect.height
+
+      const oldCanvasWidth =
+        canvas.width
+
+      const oldCanvasHeight =
+        canvas.height
+
+      let oldImage = null
+
+      if (
+        oldCanvasWidth > 0 &&
+        oldCanvasHeight > 0 &&
+        previousCssWidth > 0 &&
+        previousCssHeight > 0
+      ) {
+        try {
+          oldImage =
+            document.createElement(
+              "canvas"
+            )
+
+          oldImage.width =
+            oldCanvasWidth
+
+          oldImage.height =
+            oldCanvasHeight
+
+          const oldContext =
+            oldImage.getContext(
+              "2d"
+            )
+
+          if (oldContext) {
+            oldContext.drawImage(
+              canvas,
+              0,
+              0
+            )
+          }
+        } catch {
+          oldImage = null
+        }
+      }
+
+      canvas.width = Math.max(
+        1,
+        Math.round(
+          newCssWidth * dpr
+        )
+      )
+
+      canvas.height = Math.max(
+        1,
+        Math.round(
+          newCssHeight * dpr
+        )
+      )
 
       canvas.style.width =
-        `${rect.width}px`
+        `${newCssWidth}px`
 
       canvas.style.height =
-        `${rect.height}px`
+        `${newCssHeight}px`
 
       const context =
-        canvas.getContext(
-          "2d"
-        )
+        canvas.getContext("2d")
+
+      if (!context) {
+        return
+      }
 
       context.setTransform(
-        devicePixelRatio,
+        dpr,
         0,
         0,
-        devicePixelRatio,
+        dpr,
         0,
         0
       )
 
-      context.lineCap =
-        "round"
+      context.lineCap = "round"
+      context.lineJoin = "round"
 
-      context.lineJoin =
-        "round"
-
-      if (
-        oldCanvas.width > 0 &&
-        oldCanvas.height > 0
-      ) {
+      if (oldImage) {
         context.drawImage(
-          oldCanvas,
+          oldImage,
           0,
           0,
-          oldCanvas.width,
-          oldCanvas.height,
+          oldImage.width,
+          oldImage.height,
           0,
           0,
-          rect.width,
-          rect.height
+          previousCssWidth > 0
+            ? newCssWidth
+            : oldImage.width / dpr,
+          previousCssHeight > 0
+            ? newCssHeight
+            : oldImage.height / dpr
         )
       }
+
+      previousCssWidth =
+        newCssWidth
+
+      previousCssHeight =
+        newCssHeight
     }
 
     resizeCanvas()
@@ -298,9 +420,7 @@ function Game() {
         resizeCanvas
       )
 
-    observer.observe(
-      container
-    )
+    observer.observe(container)
 
     return () => {
       observer.disconnect()
@@ -308,10 +428,10 @@ function Game() {
   }, [])
 
   /*
-  |--------------------------------------------------------------------------
-  | Draw Line
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Draw line
+   * =========================
+   */
 
   const drawLine = ({
     x0,
@@ -320,17 +440,30 @@ function Game() {
     y1,
     color,
     size,
-    tool,
+    tool: drawTool,
   }) => {
-    const canvas =
-      canvasRef.current
+    const canvas = canvasRef.current
 
     if (!canvas) {
       return
     }
 
+    const context =
+      canvas.getContext("2d")
+
+    if (!context) {
+      return
+    }
+
     const rect =
       canvas.getBoundingClientRect()
+
+    if (
+      rect.width <= 0 ||
+      rect.height <= 0
+    ) {
+      return
+    }
 
     const startX =
       x0 * rect.width
@@ -344,10 +477,41 @@ function Game() {
     const endY =
       y1 * rect.height
 
-    const context =
-      canvas.getContext(
-        "2d"
-      )
+    const dpr =
+      window.devicePixelRatio || 1
+
+    context.save()
+
+    context.setTransform(
+      dpr,
+      0,
+      0,
+      dpr,
+      0,
+      0
+    )
+
+    context.lineWidth =
+      Number(size) || 8
+
+    context.lineCap = "round"
+    context.lineJoin = "round"
+
+    if (
+      drawTool === "eraser"
+    ) {
+      context.globalCompositeOperation =
+        "destination-out"
+
+      context.strokeStyle =
+        "#000000"
+    } else {
+      context.globalCompositeOperation =
+        "source-over"
+
+      context.strokeStyle =
+        color || "#1b1b1b"
+    }
 
     context.beginPath()
 
@@ -361,82 +525,140 @@ function Game() {
       endY
     )
 
-    context.strokeStyle =
-      tool === "eraser"
-        ? "#ffffff"
-        : color
-
-    context.lineWidth =
-      size
-
-    context.lineCap =
-      "round"
-
-    context.lineJoin =
-      "round"
-
     context.stroke()
+
+    context.restore()
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Socket Events
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Local timer
+   * =========================
+   */
+
+  const stopLocalTimer = () => {
+    if (timerRef.current) {
+      clearInterval(
+        timerRef.current
+      )
+
+      timerRef.current = null
+    }
+  }
+
+  const startLocalTimer = (
+    roundEndsAt
+  ) => {
+    stopLocalTimer()
+
+    if (!roundEndsAt) {
+      return
+    }
+
+    const updateTimer = () => {
+      const remainingMs =
+        Number(roundEndsAt) -
+        Date.now()
+
+      const remainingSeconds =
+        Math.max(
+          0,
+          Math.ceil(
+            remainingMs / 1000
+          )
+        )
+
+      setTimeRemaining(
+        remainingSeconds
+      )
+
+      if (
+        remainingSeconds <= 0
+      ) {
+        stopLocalTimer()
+        isDrawingRef.current =
+          false
+      }
+    }
+
+    updateTimer()
+
+    timerRef.current =
+      setInterval(
+        updateTimer,
+        250
+      )
+  }
+
+  /*
+   * =========================
+   * Reset round
+   * =========================
+   */
+
+  const resetRoundState = (
+    roundRoom
+  ) => {
+    stopLocalTimer()
+
+    isDrawingRef.current = false
+
+    selectingWordRef.current =
+      false
+
+    setCurrentWord("")
+    setHint("")
+    setWordPattern("")
+    setWordChoices([])
+    setGuess("")
+    setHasGuessedCorrectly(
+      false
+    )
+    setGuessMessages([])
+    setScorePopup(null)
+
+    undoStackRef.current = []
+    redoStackRef.current = []
+
+    setHistoryVersion(
+      (value) => value + 1
+    )
+
+    setTimeRemaining(
+      roundRoom?.drawingTime ||
+        60
+    )
+
+    clearLocalCanvas()
+  }
+
+  /*
+   * =========================
+   * Socket events
+   * =========================
+   */
 
   useEffect(() => {
     if (!room?.code) {
       return
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Remote Draw
-    |--------------------------------------------------------------------------
-    */
-
     const handleRemoteDraw = (
       data
     ) => {
+      if (
+        phaseRef.current !==
+        "drawing"
+      ) {
+        return
+      }
+
       drawLine(data)
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Clear Canvas
-    |--------------------------------------------------------------------------
-    */
-
-    const handleRemoteClear =
-      () => {
-        const canvas =
-          canvasRef.current
-
-        if (!canvas) {
-          return
-        }
-
-        const context =
-          canvas.getContext(
-            "2d"
-          )
-
-        const rect =
-          canvas.getBoundingClientRect()
-
-        context.clearRect(
-          0,
-          0,
-          rect.width,
-          rect.height
-        )
-      }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Choosing Word
-    |--------------------------------------------------------------------------
-    */
+    const handleRemoteClear = () => {
+      clearLocalCanvas()
+    }
 
     const handleRoundChoosing = ({
       room: choosingRoom,
@@ -445,48 +667,29 @@ function Game() {
       artistId:
         choosingArtistId,
     }) => {
-      console.log(
-        "================================"
-      )
-
-      console.log(
-        "CHOOSING WORD"
-      )
-
-      console.log(
-        "Round:",
-        choosingRound
-      )
-
-      console.log(
-        "Artist:",
-        choosingArtistId
-      )
-
-      console.log(
-        "Players:",
-        choosingRoom?.players
-      )
-
-      console.log(
-        "================================"
-      )
-
-      /*
-      | Sync players immediately.
-      */
-
-      if (
-        choosingRoom?.players
-      ) {
-        setPlayers(
-          choosingRoom.players
-        )
+      if (!choosingRoom) {
+        return
       }
 
-      setPhase(
-        "choosing"
+      console.log(
+        `Round ${choosingRound}: artist ${choosingArtistId} is choosing`
       )
+
+      phaseRef.current =
+        "choosing"
+
+      artistIdRef.current =
+        choosingArtistId
+
+      selectingWordRef.current =
+        false
+
+      setPlayers(
+        choosingRoom.players ||
+          []
+      )
+
+      setPhase("choosing")
 
       setCurrentRound(
         choosingRound
@@ -496,105 +699,20 @@ function Game() {
         choosingArtistId
       )
 
-      setCurrentWord(
-        ""
+      resetRoundState(
+        choosingRoom
       )
-
-      setHint(
-        ""
-      )
-
-      setWordLength(
-        0
-      )
-
-      setWordChoices(
-        []
-      )
-
-      setGuess(
-        ""
-      )
-
-      setHasGuessedCorrectly(
-        false
-      )
-
-      setGuessMessages(
-        []
-      )
-
-      setScorePopup(
-        null
-      )
-
-      setTimeRemaining(
-        room.drawingTime
-      )
-
-      undoStackRef.current =
-        []
-
-      redoStackRef.current =
-        []
-
-      /*
-      | Clear local canvas.
-      */
-
-      const canvas =
-        canvasRef.current
-
-      if (canvas) {
-        const context =
-          canvas.getContext(
-            "2d"
-          )
-
-        const rect =
-          canvas.getBoundingClientRect()
-
-        context.clearRect(
-          0,
-          0,
-          rect.width,
-          rect.height
-        )
-      }
-
-      if (
-        timerRef.current
-      ) {
-        clearInterval(
-          timerRef.current
-        )
-      }
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Word Choices
-    |--------------------------------------------------------------------------
-    */
 
     const handleWordChoices = ({
       choices,
     }) => {
-      console.log(
-        "Word choices:",
-        choices
-      )
-
       setWordChoices(
-        choices || []
+        Array.isArray(choices)
+          ? choices
+          : []
       )
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Drawing Started
-    |--------------------------------------------------------------------------
-    */
 
     const handleRoundStarted = ({
       room: startedRoom,
@@ -605,47 +723,32 @@ function Game() {
       roundEndsAt,
       hint:
         startedHint,
-      wordLength:
-        startedWordLength,
+      wordPattern:
+        startedWordPattern,
     }) => {
-      console.log(
-        "================================"
-      )
-
-      console.log(
-        "DRAWING STARTED"
-      )
-
-      console.log(
-        "Round:",
-        startedRound
-      )
-
-      console.log(
-        "Artist:",
-        startedArtistId
-      )
-
-      console.log(
-        "Players:",
-        startedRoom?.players
-      )
-
-      console.log(
-        "================================"
-      )
-
-      if (
-        startedRoom?.players
-      ) {
-        setPlayers(
-          startedRoom.players
-        )
+      if (!startedRoom) {
+        return
       }
 
-      setPhase(
-        "drawing"
+      console.log(
+        `Round ${startedRound} started. Artist: ${startedArtistId}`
       )
+
+      phaseRef.current =
+        "drawing"
+
+      artistIdRef.current =
+        startedArtistId
+
+      selectingWordRef.current =
+        false
+
+      setPlayers(
+        startedRoom.players ||
+          []
+      )
+
+      setPhase("drawing")
 
       setCurrentRound(
         startedRound
@@ -656,95 +759,65 @@ function Game() {
       )
 
       setHint(
-        startedHint
+        startedHint || ""
       )
 
-      setWordLength(
-        startedWordLength
+      setWordPattern(
+        startedWordPattern || ""
       )
 
-      setWordChoices(
-        []
-      )
+      setWordChoices([])
 
-      setCurrentWord(
-        ""
-      )
-
-      setGuess(
-        ""
-      )
+      setCurrentWord("")
+      setGuess("")
 
       setHasGuessedCorrectly(
         false
       )
 
-      setGuessMessages(
-        []
+      setGuessMessages([])
+      setScorePopup(null)
+
+      undoStackRef.current = []
+      redoStackRef.current = []
+
+      setHistoryVersion(
+        (value) => value + 1
       )
 
-      undoStackRef.current =
-        []
-
-      redoStackRef.current =
-        []
-
-      setScorePopup(
-        null
-      )
+      clearLocalCanvas()
 
       startLocalTimer(
         roundEndsAt
       )
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Artist Word
-    |--------------------------------------------------------------------------
-    */
-
     const handleArtistWord = ({
       word,
     }) => {
       setCurrentWord(
-        word
+        word || ""
       )
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Player Guess
-    |--------------------------------------------------------------------------
-    */
-
     const handlePlayerGuess = ({
       playerName,
-      guess,
+      guess: playerGuess,
       correct,
     }) => {
       setGuessMessages(
         (messages) => [
           ...messages,
           {
-            type:
-              correct
-                ? "correct"
-                : "guess",
-
+            type: correct
+              ? "correct"
+              : "guess",
             playerName,
-
-            guess,
+            guess: playerGuess,
           },
         ]
       )
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Correct Guess
-    |--------------------------------------------------------------------------
-    */
 
     const handleCorrectGuess = ({
       score,
@@ -753,104 +826,109 @@ function Game() {
         true
       )
 
-      setScorePopup(
-        score
-      )
+      setScorePopup(score)
 
-      setTimeout(() => {
-        setScorePopup(
-          null
+      if (
+        scorePopupTimerRef.current
+      ) {
+        clearTimeout(
+          scorePopupTimerRef.current
         )
-      }, 2000)
+      }
+
+      scorePopupTimerRef.current =
+        setTimeout(() => {
+          setScorePopup(null)
+
+          scorePopupTimerRef.current =
+            null
+        }, 2000)
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Player Guessed Correctly
-    |--------------------------------------------------------------------------
-    */
+    const handlePlayerGuessedCorrectly =
+      ({
+        playerId,
+        playerName,
+      }) => {
+        setGuessMessages(
+          (messages) => {
+            const alreadyShown =
+              messages.some(
+                (message) =>
+                  message.type ===
+                    "correct" &&
+                  message.playerId ===
+                    playerId
+              )
 
-    const handlePlayerGuessedCorrectly = ({
-      playerName,
-    }) => {
-      setGuessMessages(
-        (messages) => [
-          ...messages,
-          {
-            type:
-              "correct",
+            if (alreadyShown) {
+              return messages
+            }
 
-            playerName,
-          },
-        ]
-      )
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Players Updated
-    |--------------------------------------------------------------------------
-    */
+            return [
+              ...messages,
+              {
+                type: "correct",
+                playerId,
+                playerName,
+              },
+            ]
+          }
+        )
+      }
 
     const handlePlayersUpdated = ({
       players:
         updatedPlayers,
     }) => {
-      console.log(
-        "Players updated:",
-        updatedPlayers
-      )
-
       if (
-        Array.isArray(
+        !Array.isArray(
           updatedPlayers
         )
       ) {
-        setPlayers(
-          updatedPlayers
-        )
+        return
       }
+
+      setPlayers(
+        updatedPlayers
+      )
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Game Finished
-    |--------------------------------------------------------------------------
-    */
+    const handleGameFinished = ({
+      room:
+        finishedRoom,
+    }) => {
+      stopLocalTimer()
 
-    const handleGameFinished =
-      ({
-        room:
-          finishedRoom,
-      }) => {
-        console.log(
-          "Game finished"
-        )
+      isDrawingRef.current =
+        false
 
-        if (
-          timerRef.current
-        ) {
-          clearInterval(
-            timerRef.current
-          )
-        }
-
-        navigate(
-          "/score",
-          {
-            state: {
-              room:
-                finishedRoom,
-            },
-          }
-        )
+      if (!finishedRoom) {
+        return
       }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Register Events
-    |--------------------------------------------------------------------------
-    */
+      navigate("/score", {
+        state: {
+          room: finishedRoom,
+        },
+      })
+    }
+
+    const handleRoomError = ({
+      message,
+    }) => {
+      console.error(
+        "Room error:",
+        message
+      )
+
+      selectingWordRef.current =
+        false
+
+      setWordChoices([])
+
+      setScorePopup(null)
+    }
 
     socket.on(
       "draw",
@@ -907,11 +985,10 @@ function Game() {
       handleGameFinished
     )
 
-    /*
-    |--------------------------------------------------------------------------
-    | Cleanup
-    |--------------------------------------------------------------------------
-    */
+    socket.on(
+      "roomError",
+      handleRoomError
+    )
 
     return () => {
       socket.off(
@@ -969,12 +1046,22 @@ function Game() {
         handleGameFinished
       )
 
+      socket.off(
+        "roomError",
+        handleRoomError
+      )
+
+      stopLocalTimer()
+
       if (
-        timerRef.current
+        scorePopupTimerRef.current
       ) {
-        clearInterval(
-          timerRef.current
+        clearTimeout(
+          scorePopupTimerRef.current
         )
+
+        scorePopupTimerRef.current =
+          null
       }
     }
   }, [
@@ -983,10 +1070,10 @@ function Game() {
   ])
 
   /*
-  |--------------------------------------------------------------------------
-  | Select Word
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Select word
+   * =========================
+   */
 
   const handleSelectWord = (
     choice
@@ -996,17 +1083,32 @@ function Game() {
     }
 
     if (
-      phase !==
+      phaseRef.current !==
       "choosing"
     ) {
       return
     }
 
+    if (!choice?.word) {
+      return
+    }
+
     if (
-      !choice?.word
+      selectingWordRef.current
     ) {
       return
     }
+
+    if (!socket.connected) {
+      console.warn(
+        "Socket is not connected"
+      )
+
+      return
+    }
+
+    selectingWordRef.current =
+      true
 
     console.log(
       "Selected word:",
@@ -1016,29 +1118,19 @@ function Game() {
     socket.emit(
       "selectWord",
       {
-        word:
-          choice.word,
-
-        hint:
-          choice.hint,
+        word: choice.word,
+        hint: choice.hint,
       }
     )
 
-    /*
-    | Hide choices immediately.
-    | Server will confirm with roundStarted.
-    */
-
-    setWordChoices(
-      []
-    )
+    setWordChoices([])
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Save Canvas
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Canvas history
+   * =========================
+   */
 
   const saveCanvasState = () => {
     const canvas =
@@ -1048,26 +1140,30 @@ function Game() {
       return
     }
 
-    undoStackRef.current.push(
-      canvas.toDataURL()
-    )
+    try {
+      undoStackRef.current.push(
+        canvas.toDataURL()
+      )
 
-    if (
-      undoStackRef.current
-        .length > 30
-    ) {
-      undoStackRef.current.shift()
+      if (
+        undoStackRef.current
+          .length > 30
+      ) {
+        undoStackRef.current.shift()
+      }
+
+      redoStackRef.current = []
+
+      setHistoryVersion(
+        (value) => value + 1
+      )
+    } catch (error) {
+      console.error(
+        "Could not save canvas state:",
+        error
+      )
     }
-
-    redoStackRef.current =
-      []
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Restore Canvas
-  |--------------------------------------------------------------------------
-  */
 
   const restoreCanvasState = (
     dataUrl
@@ -1075,28 +1171,65 @@ function Game() {
     const canvas =
       canvasRef.current
 
-    if (!canvas) {
+    if (!canvas || !dataUrl) {
       return
     }
 
-    const context =
-      canvas.getContext(
-        "2d"
-      )
-
-    const image =
-      new Image()
+    const image = new Image()
 
     image.onload = () => {
+      const context =
+        canvas.getContext("2d")
+
+      if (!context) {
+        return
+      }
+
       const rect =
         canvas.getBoundingClientRect()
+
+      if (
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) {
+        return
+      }
+
+      const dpr =
+        window.devicePixelRatio ||
+        1
+
+      context.save()
+
+      context.setTransform(
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      )
 
       context.clearRect(
         0,
         0,
-        rect.width,
-        rect.height
+        canvas.width,
+        canvas.height
       )
+
+      context.restore()
+
+      context.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+      )
+
+      context.globalCompositeOperation =
+        "source-over"
 
       context.drawImage(
         image,
@@ -1105,19 +1238,23 @@ function Game() {
         rect.width,
         rect.height
       )
+
+      context.lineCap = "round"
+      context.lineJoin = "round"
     }
 
-    image.src =
-      dataUrl
+    image.src = dataUrl
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Undo
-  |--------------------------------------------------------------------------
-  */
-
   const handleUndo = () => {
+    if (
+      !isArtist ||
+      phaseRef.current !==
+        "drawing"
+    ) {
+      return
+    }
+
     const canvas =
       canvasRef.current
 
@@ -1144,15 +1281,21 @@ function Game() {
         previous
       )
     }
+
+    setHistoryVersion(
+      (value) => value + 1
+    )
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Redo
-  |--------------------------------------------------------------------------
-  */
-
   const handleRedo = () => {
+    if (
+      !isArtist ||
+      phaseRef.current !==
+        "drawing"
+    ) {
+      return
+    }
+
     const canvas =
       canvasRef.current
 
@@ -1175,17 +1318,19 @@ function Game() {
       redoStackRef.current.pop()
 
     if (next) {
-      restoreCanvasState(
-        next
-      )
+      restoreCanvasState(next)
     }
+
+    setHistoryVersion(
+      (value) => value + 1
+    )
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Pointer Position
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Pointer helpers
+   * =========================
+   */
 
   const getPointerPosition = (
     event
@@ -1193,14 +1338,24 @@ function Game() {
     const canvas =
       canvasRef.current
 
+    if (!canvas) {
+      return null
+    }
+
     const rect =
       canvas.getBoundingClientRect()
+
+    if (
+      rect.width <= 0 ||
+      rect.height <= 0
+    ) {
+      return null
+    }
 
     return {
       x:
         event.clientX -
         rect.left,
-
       y:
         event.clientY -
         rect.top,
@@ -1208,10 +1363,10 @@ function Game() {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Pointer Down
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Pointer down
+   * =========================
+   */
 
   const handlePointerDown = (
     event
@@ -1221,8 +1376,15 @@ function Game() {
     }
 
     if (
-      phase !==
+      phaseRef.current !==
       "drawing"
+    ) {
+      return
+    }
+
+    if (
+      tool !== "draw" &&
+      tool !== "eraser"
     ) {
       return
     }
@@ -1234,23 +1396,22 @@ function Game() {
       return
     }
 
-    if (
-      tool !== "draw" &&
-      tool !== "eraser"
-    ) {
+    const position =
+      getPointerPosition(event)
+
+    if (!position) {
       return
     }
 
     saveCanvasState()
 
-    canvas.setPointerCapture(
-      event.pointerId
-    )
-
-    const position =
-      getPointerPosition(
-        event
+    try {
+      canvas.setPointerCapture(
+        event.pointerId
       )
+    } catch {
+      // Ignore pointer capture errors.
+    }
 
     isDrawingRef.current =
       true
@@ -1258,45 +1419,57 @@ function Game() {
     lastPositionRef.current =
       position
 
-    const context =
-      canvas.getContext(
-        "2d"
+    const rect =
+      canvas.getBoundingClientRect()
+
+    const x = Math.max(
+      0,
+      Math.min(
+        1,
+        position.x /
+          rect.width
       )
-
-    context.beginPath()
-
-    context.moveTo(
-      position.x,
-      position.y
     )
 
-    context.lineTo(
-      position.x + 0.01,
-      position.y + 0.01
+    const y = Math.max(
+      0,
+      Math.min(
+        1,
+        position.y /
+          rect.height
+      )
     )
 
-    context.strokeStyle =
-      tool === "eraser"
-        ? "#ffffff"
-        : selectedColor
+    const dotData = {
+      x0: x,
+      y0: y,
+      x1: x + 0.00001,
+      y1: y + 0.00001,
+      color:
+        selectedColor,
+      size: brushSize,
+      tool,
+    }
 
-    context.lineWidth =
-      brushSize
+    drawLine(dotData)
 
-    context.lineCap =
-      "round"
-
-    context.lineJoin =
-      "round"
-
-    context.stroke()
+    if (
+      socket.connected &&
+      room?.code
+    ) {
+      socket.emit("draw", {
+        roomCode:
+          room.code,
+        ...dotData,
+      })
+    }
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Pointer Move
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Pointer move
+   * =========================
+   */
 
   const handlePointerMove = (
     event
@@ -1312,9 +1485,12 @@ function Game() {
     }
 
     if (
-      phase !==
+      phaseRef.current !==
       "drawing"
     ) {
+      isDrawingRef.current =
+        false
+
       return
     }
 
@@ -1326,9 +1502,11 @@ function Game() {
     }
 
     const position =
-      getPointerPosition(
-        event
-      )
+      getPointerPosition(event)
+
+    if (!position) {
+      return
+    }
 
     const rect =
       canvas.getBoundingClientRect()
@@ -1336,21 +1514,41 @@ function Game() {
     const previous =
       lastPositionRef.current
 
-    const x0 =
-      previous.x /
-      rect.width
+    const x0 = Math.max(
+      0,
+      Math.min(
+        1,
+        previous.x /
+          rect.width
+      )
+    )
 
-    const y0 =
-      previous.y /
-      rect.height
+    const y0 = Math.max(
+      0,
+      Math.min(
+        1,
+        previous.y /
+          rect.height
+      )
+    )
 
-    const x1 =
-      position.x /
-      rect.width
+    const x1 = Math.max(
+      0,
+      Math.min(
+        1,
+        position.x /
+          rect.width
+      )
+    )
 
-    const y1 =
-      position.y /
-      rect.height
+    const y1 = Math.max(
+      0,
+      Math.min(
+        1,
+        position.y /
+          rect.height
+      )
+    )
 
     const drawingData = {
       x0,
@@ -1359,8 +1557,7 @@ function Game() {
       y1,
       color:
         selectedColor,
-      size:
-        brushSize,
+      size: brushSize,
       tool,
     }
 
@@ -1372,15 +1569,11 @@ function Game() {
       socket.connected &&
       room?.code
     ) {
-      socket.emit(
-        "draw",
-        {
-          roomCode:
-            room.code,
-
-          ...drawingData,
-        }
-      )
+      socket.emit("draw", {
+        roomCode:
+          room.code,
+        ...drawingData,
+      })
     }
 
     lastPositionRef.current =
@@ -1388,33 +1581,16 @@ function Game() {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Pointer Up
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Pointer up
+   * =========================
+   */
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (
+    event
+  ) => {
     isDrawingRef.current =
       false
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Clear
-  |--------------------------------------------------------------------------
-  */
-
-  const handleClear = () => {
-    if (!isArtist) {
-      return
-    }
-
-    if (
-      phase !==
-      "drawing"
-    ) {
-      return
-    }
 
     const canvas =
       canvasRef.current
@@ -1423,22 +1599,47 @@ function Game() {
       return
     }
 
+    if (
+      event?.pointerId !==
+      undefined
+    ) {
+      try {
+        if (
+          canvas.hasPointerCapture(
+            event.pointerId
+          )
+        ) {
+          canvas.releasePointerCapture(
+            event.pointerId
+          )
+        }
+      } catch {
+        // Ignore pointer capture errors.
+      }
+    }
+  }
+
+  /*
+   * =========================
+   * Clear canvas
+   * =========================
+   */
+
+  const handleClear = () => {
+    if (!isArtist) {
+      return
+    }
+
+    if (
+      phaseRef.current !==
+      "drawing"
+    ) {
+      return
+    }
+
     saveCanvasState()
 
-    const context =
-      canvas.getContext(
-        "2d"
-      )
-
-    const rect =
-      canvas.getBoundingClientRect()
-
-    context.clearRect(
-      0,
-      0,
-      rect.width,
-      rect.height
-    )
+    clearLocalCanvas()
 
     if (
       socket.connected &&
@@ -1451,100 +1652,69 @@ function Game() {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Color
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Tools
+   * =========================
+   */
 
   const handleColorChange = (
     color
   ) => {
-    if (!isArtist) {
-      return
-    }
-
     if (
-      phase !==
-      "drawing"
+      !isArtist ||
+      phaseRef.current !==
+        "drawing"
     ) {
       return
     }
 
-    setSelectedColor(
-      color
-    )
-
-    setTool(
-      "draw"
-    )
+    setSelectedColor(color)
+    setTool("draw")
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Draw Tool
-  |--------------------------------------------------------------------------
-  */
 
   const handleDraw = () => {
-    if (!isArtist) {
-      return
-    }
-
     if (
-      phase !==
-      "drawing"
+      !isArtist ||
+      phaseRef.current !==
+        "drawing"
     ) {
       return
     }
 
-    setTool(
-      "draw"
-    )
+    setTool("draw")
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Eraser
-  |--------------------------------------------------------------------------
-  */
 
   const handleEraser = () => {
-    if (!isArtist) {
-      return
-    }
-
     if (
-      phase !==
-      "drawing"
+      !isArtist ||
+      phaseRef.current !==
+        "drawing"
     ) {
       return
     }
 
-    setTool(
-      "eraser"
-    )
+    setTool("eraser")
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Guess Submit
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Guess
+   * =========================
+   */
 
   const handleGuessSubmit = (
     event
   ) => {
     event.preventDefault()
 
-    if (
-      !guess.trim()
-    ) {
+    const cleanGuess =
+      guess.trim()
+
+    if (!cleanGuess) {
       return
     }
 
-    if (
-      !socket.connected
-    ) {
+    if (!socket.connected) {
       return
     }
 
@@ -1553,130 +1723,160 @@ function Game() {
     }
 
     if (
-      phase !==
+      phaseRef.current !==
       "drawing"
     ) {
       return
     }
 
-    if (
-      hasGuessedCorrectly
-    ) {
+    if (hasGuessedCorrectly) {
       return
     }
 
-    socket.emit(
-      "guess",
-      {
-        guess:
-          guess.trim(),
-      }
-    )
+    if (timeRemaining <= 0) {
+      return
+    }
+
+    socket.emit("guess", {
+      guess: cleanGuess,
+    })
 
     setGuess("")
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Leave
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Leave
+   * =========================
+   */
 
   const handleLeave = () => {
-    socket.emit(
-      "leaveRoom"
-    )
+    stopLocalTimer()
 
-    socket.disconnect()
+    isDrawingRef.current =
+      false
+
+    if (socket.connected) {
+      socket.emit(
+        "leaveRoom"
+      )
+
+      socket.disconnect()
+    }
 
     navigate("/room")
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | No Room
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Cleanup
+   * =========================
+   */
+
+  useEffect(() => {
+    return () => {
+      stopLocalTimer()
+
+      if (
+        scorePopupTimerRef.current
+      ) {
+        clearTimeout(
+          scorePopupTimerRef.current
+        )
+
+        scorePopupTimerRef.current =
+          null
+      }
+
+      isDrawingRef.current =
+        false
+    }
+  }, [])
+
+  /*
+   * =========================
+   * No room
+   * =========================
+   */
 
   if (!room) {
-    return null
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f4f5f5] px-6">
+        <div className="rounded-[20px] border-[3px] border-[#222] bg-white p-8 text-center">
+          <h1 className="text-2xl font-extrabold">
+            Room data not found
+          </h1>
+
+          <p className="mt-2 text-sm text-[#666]">
+            Please return to the room.
+          </p>
+
+          <button
+            type="button"
+            onClick={() =>
+              navigate("/room")
+            }
+            className="mt-5 rounded-full border-[3px] border-[#222] bg-[#e0f878] px-6 py-3 font-extrabold transition hover:bg-[#d0e868]"
+          >
+            Back to Room
+          </button>
+        </div>
+      </div>
+    )
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Render
-  |--------------------------------------------------------------------------
-  */
+   * =========================
+   * Render
+   * =========================
+   */
 
   return (
-    <div className="min-h-screen bg-white text-[#1b1b1b]">
-
-      {/* Score Popup */}
-
+    <div className="min-h-screen bg-[#f4f5f5] text-[#222]">
       {scorePopup !== null && (
-        <div className="fixed left-1/2 top-8 z-50 -translate-x-1/2 rounded-full border-[3px] border-[#111] bg-[#e8f79c] px-8 py-3 text-lg font-extrabold shadow-[0_4px_0_#111]">
+        <div className="pointer-events-none fixed left-1/2 top-24 z-50 -translate-x-1/2 rounded-full border-[3px] border-[#222] bg-[#e0f878] px-6 py-3 text-xl font-extrabold shadow-[0_4px_0_#222]">
           🎉 Correct! +
           {scorePopup} pts
         </div>
       )}
 
-      {/* Header */}
-
-      <header className="flex items-center justify-between border-b-[3px] border-[#111] px-6 py-4">
-
+      <header className="flex items-center justify-between border-b-[3px] border-[#111] bg-white px-6 py-4">
         <h1 className="text-4xl font-extrabold">
           Picasso?
         </h1>
 
         <button
           type="button"
-          onClick={
-            handleLeave
-          }
+          onClick={handleLeave}
           className="rounded-full border-[3px] border-[#111] bg-white px-8 py-3 text-lg font-bold transition hover:bg-[#f2f2f2]"
         >
           Leave
         </button>
-
       </header>
 
-      {/* Top Info */}
-
-      <section className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-8 pb-4 pt-6">
-
+      <section className="grid grid-cols-1 items-center gap-4 px-6 pb-4 pt-6 md:grid-cols-[1fr_auto_1fr] md:px-8">
         <div className="flex items-center gap-4">
-
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#ebebeb] text-2xl">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#ebebeb] text-2xl">
             🎲
           </div>
 
           <div>
-
             <p className="text-xs font-bold tracking-wide text-[#666]">
               MATCH STAGE
             </p>
 
             <p className="text-2xl font-medium">
-
-              Round{" "}
-              {currentRound}
+              Round {currentRound}
 
               <span className="text-lg text-[#666]">
                 {" "}
-                of{" "}
-                {room.rounds}
+                of {room.rounds}
               </span>
-
             </p>
-
           </div>
-
         </div>
 
-        {/* Center */}
-
-        <div className="rounded-[16px] border-[3px] border-[#111] bg-white px-10 py-3 text-center shadow-[0_4px_0_#111]">
-
+        <div className="rounded-[16px] border-[3px] border-[#111] bg-white px-6 py-3 text-center shadow-[0_4px_0_#111] md:px-10">
           {phase ===
           "choosing" ? (
             <>
@@ -1700,39 +1900,23 @@ function Game() {
                   : "GUESS THE WORD!"}
               </p>
 
-              <p className="text-2xl font-extrabold">
-
+              <p className="max-w-[360px] truncate text-2xl font-extrabold">
                 {isArtist
                   ? currentWord ||
                     "Loading..."
-                  : Array.from({
-                      length:
-                        wordLength ||
-                        3,
-                    })
-                      .map(
-                        () =>
-                          "＿"
-                      )
-                      .join(" ")}
-
+                  : wordPattern ||
+                    "＿"}
               </p>
             </>
           )}
-
         </div>
 
-        {/* Timer */}
-
-        <div className="flex items-center justify-self-end gap-4 rounded-full border-2 border-[#111] bg-white px-5 py-2 shadow-[0_3px_0_#d4d4d4]">
-
+        <div className="flex items-center justify-self-start gap-4 rounded-full border-2 border-[#111] bg-white px-5 py-2 shadow-[0_3px_0_#d4d4d4] md:justify-self-end">
           <div
             className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold text-white ${
-              phase ===
-              "choosing"
+              phase === "choosing"
                 ? "bg-[#999]"
-                : timeRemaining <=
-                    5
+                : timeRemaining <= 5
                   ? "bg-[#c62828]"
                   : "bg-[#111]"
             }`}
@@ -1744,7 +1928,6 @@ function Game() {
           </div>
 
           <div>
-
             <p className="text-xs tracking-wide text-[#666]">
               {phase ===
               "choosing"
@@ -1758,22 +1941,15 @@ function Game() {
                 ? "Waiting"
                 : `${timeRemaining}s`}
             </p>
-
           </div>
-
         </div>
-
       </section>
-
-      {/* Choosing Word Panel */}
 
       {phase ===
         "choosing" &&
         isArtist && (
           <section className="mx-6 mb-4 rounded-[24px] border-[3px] border-[#111] bg-[#e8f79c] p-6 shadow-[0_4px_0_#111]">
-
             <div className="mb-5 text-center">
-
               <p className="text-sm font-bold tracking-wider text-[#666]">
                 YOUR TURN TO DRAW
               </p>
@@ -1783,153 +1959,75 @@ function Game() {
               </h2>
 
               <p className="mt-1 text-sm text-[#666]">
-                Everyone will guess the word you choose.
+                Everyone will guess the
+                word you choose.
               </p>
-
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
-
+            <div className="mx-auto grid max-w-[900px] grid-cols-1 gap-4 md:grid-cols-3">
               {wordChoices.map(
-                (
-                  choice,
-                  index
-                ) => (
-
+                (choice) => (
                   <button
                     key={
-                      `${choice.word}-${index}`
+                      choice.word
                     }
                     type="button"
+                    disabled={
+                      selectingWordRef.current
+                    }
                     onClick={() =>
                       handleSelectWord(
                         choice
                       )
                     }
-                    className="rounded-[18px] border-[3px] border-[#111] bg-white px-5 py-6 text-center font-extrabold shadow-[0_4px_0_#111] transition hover:-translate-y-1 hover:bg-[#f5f5f5] active:translate-y-1 active:shadow-none"
+                    className="rounded-[18px] border-[3px] border-[#111] bg-white px-5 py-6 text-center font-extrabold shadow-[0_4px_0_#111] transition hover:-translate-y-1 hover:bg-[#f7f7f7] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-
-                    <span className="block text-xs font-bold text-[#888]">
-                      OPTION{" "}
-                      {index +
-                        1}
-                    </span>
-
-                    <span className="mt-1 block text-2xl">
+                    <p className="text-xl">
                       {choice.word}
-                    </span>
+                    </p>
 
+                    <p className="mt-2 text-sm font-medium text-[#666]">
+                      {choice.hint}
+                    </p>
                   </button>
-
                 )
               )}
-
             </div>
-
-            {wordChoices.length ===
-              0 && (
-              <p className="text-center text-sm font-semibold text-[#666]">
-                Loading word choices...
-              </p>
-            )}
-
           </section>
         )}
-
-      {/* Waiting For Artist */}
 
       {phase ===
         "choosing" &&
         !isArtist && (
-          <section className="mx-6 mb-4 rounded-[24px] bg-[#ebebeb] p-8 text-center">
-
-            <div className="text-5xl">
-              ✏️
-            </div>
-
-            <h2 className="mt-3 text-2xl font-extrabold">
-              {players.find(
-                (player) =>
-                  player.id ===
-                  artistId
-              )?.name ||
-                "The artist"}{" "}
-              is choosing a word...
-            </h2>
-
-            <p className="mt-2 text-sm text-[#666]">
-              Get ready to guess!
+          <section className="mx-6 mb-4 rounded-[24px] border-[3px] border-[#111] bg-white p-6 text-center shadow-[0_4px_0_#111]">
+            <p className="text-4xl">
+              🎨
             </p>
 
+            <h2 className="mt-2 text-2xl font-extrabold">
+              The artist is choosing a word...
+            </h2>
+
+            <p className="mt-1 text-sm text-[#666]">
+              Get ready to guess!
+            </p>
           </section>
         )}
 
-      {/* Guess Feed / Hint */}
-
-      {phase ===
-        "drawing" && (
-        <section className="mx-6 flex flex-wrap items-center justify-between gap-4 rounded-[16px] bg-[#ebebeb] px-6 py-3">
-
-          <div className="flex flex-wrap items-center">
-
-            <p className="text-sm font-semibold text-[#666]">
-              GUESSER FEED:
-            </p>
-
-            <div className="ml-4 flex items-center gap-2">
-
-              {Array.from({
-                length:
-                  Math.max(
-                    1,
-                    wordLength
-                  ),
-              }).map(
-                (_, index) => (
-                  <span
-                    key={`word-${index}`}
-                    className="inline-block w-4 border-b-2 border-[#666]"
-                  />
-                )
-              )}
-
-            </div>
-
-          </div>
-
-          <p className="text-sm font-medium">
-            💡 Hint:{" "}
-            {hint ||
-              "Loading..."}
-          </p>
-
-        </section>
-      )}
-
-      {/* Main */}
-
-      <main className="grid grid-cols-[300px_minmax(0,1fr)_300px] gap-4 px-6 py-5">
-
-        {/* Players */}
-
-        <aside className="flex flex-col gap-3 rounded-[24px] bg-[#ebebeb] p-4">
-
-          <div className="flex items-center justify-between px-1">
-
-            <h2 className="text-xl font-medium">
-              👥 Players
+      <main className="grid gap-5 px-6 pb-8 md:px-8 lg:grid-cols-[220px_minmax(0,1fr)_280px]">
+        <aside className="rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-xl font-extrabold">
+              Players
             </h2>
 
-            <span className="rounded-lg bg-[#d4d4d4] px-3 py-1 text-xs">
-              {players.length} /{" "}
-              {room.maxPlayers}{" "}
-              Active
+            <span className="rounded-full bg-[#eee] px-3 py-1 text-xs font-bold">
+              {players.length}/
+              {room.maxPlayers}
             </span>
-
           </div>
 
           <div className="flex flex-col gap-2">
-
             {players.map(
               (player) => {
                 const playerIsArtist =
@@ -1941,182 +2039,56 @@ function Game() {
                     key={
                       player.id
                     }
-                    className={`flex items-center gap-3 p-3 ${
+                    className={`flex items-center justify-between rounded-[12px] border-2 border-[#222] px-3 py-3 ${
                       playerIsArtist
-                        ? "border-b-[3px] border-[#7d7a25] bg-[#e8f79c]"
-                        : "bg-white"
+                        ? "bg-[#e8f79c]"
+                        : "bg-[#fafafa]"
                     }`}
                   >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#eee]">
+                        🐱
+                      </div>
 
-                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#d4d4d4] text-xl">
-                      🐱
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-extrabold">
+                          {player.name}
+                        </p>
 
-                      {playerIsArtist && (
-                        <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-[#a2401c] text-xs text-white">
-                          ✎
-                        </span>
-                      )}
+                        <p className="text-xs text-[#777]">
+                          {playerIsArtist
+                            ? "Artist"
+                            : "Player"}
+                        </p>
+                      </div>
                     </div>
 
-                    <div className="min-w-0 flex-1">
-
-                      <p className="truncate text-sm font-semibold">
-
-                        {player.name}
-
-                        {player.id ===
-                          socket.id && (
-                          <span className="ml-1 text-xs text-[#a2401c]">
-                            (You)
-                          </span>
-                        )}
-
-                      </p>
-
-                      <p className="text-sm text-[#666]">
-
-                        {phase ===
-                        "choosing"
-                          ? playerIsArtist
-                            ? "Choosing..."
-                            : "Waiting..."
-                          : playerIsArtist
-                            ? "Drawing..."
-                            : hasGuessedCorrectly &&
-                                player.id ===
-                                  socket.id
-                              ? "Correct!"
-                              : "Guessing..."}
-
-                      </p>
-
-                    </div>
-
-                    <p className="text-right text-lg font-medium">
-
+                    <span className="ml-2 shrink-0 text-sm font-extrabold">
                       {player.score ||
                         0}
-
-                      <small className="block text-xs text-[#666]">
-                        pts
-                      </small>
-
-                    </p>
-
+                    </span>
                   </div>
                 )
               }
             )}
-
           </div>
-
         </aside>
 
-        {/* Canvas */}
-
-        <section className="flex min-w-0 flex-col gap-3 rounded-[24px] bg-[#ebebeb] p-4">
-
-          {/* Tools */}
-
-          <div className="flex items-center gap-2">
-
-            <button
-              type="button"
-              onClick={
-                handleUndo
-              }
-              disabled={
-                !isArtist ||
-                phase !==
-                  "drawing"
-              }
-              className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#111] bg-white text-xl transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
-              title="Undo"
-            >
-              ↶
-            </button>
-
-            <button
-              type="button"
-              onClick={
-                handleRedo
-              }
-              disabled={
-                !isArtist ||
-                phase !==
-                  "drawing"
-              }
-              className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#111] bg-white text-xl transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
-              title="Redo"
-            >
-              ↷
-            </button>
-
-            <div className="mx-1 h-6 w-px bg-[#d4d4d4]" />
-
-            <button
-              type="button"
-              disabled
-              className="flex h-10 w-10 cursor-not-allowed items-center justify-center rounded-full border-2 border-[#111] bg-white opacity-40"
-              title="Zoom"
-            >
-              🔍
-            </button>
-
-            <button
-              type="button"
-              disabled
-              className="flex h-10 w-10 cursor-not-allowed items-center justify-center rounded-full border-2 border-[#111] bg-white opacity-40"
-              title="Snapshot"
-            >
-              📷
-            </button>
-
-          </div>
-
-          {/* Canvas */}
-
+        <section className="min-w-0">
           <div
             ref={
               canvasContainerRef
             }
-            className={`relative min-h-[420px] flex-1 overflow-hidden rounded-[28px] bg-white shadow-[0_0_0_1px_#d4d4d4] ${
-              !isArtist ||
-              phase !==
-                "drawing"
-                ? "cursor-not-allowed"
-                : "cursor-crosshair"
-            }`}
+            className="relative aspect-[4/3] min-h-[400px] w-full overflow-hidden rounded-[20px] border-[3px] border-[#111] bg-white shadow-[0_4px_0_#111]"
           >
-
-            {/* Canvas Status */}
-
-            <div
-              className={`absolute left-3 top-3 z-10 rounded-full border-2 border-[#111] px-3 py-1 text-xs font-semibold ${
-                phase ===
-                  "choosing"
-                  ? "bg-white"
-                  : isArtist
-                    ? "bg-[#e8f79c]"
-                    : "bg-white"
-              }`}
-            >
-
-              {phase ===
-              "choosing"
-                ? isArtist
-                  ? "✏️ Choose a word above"
-                  : "👀 Waiting for artist..."
-                : isArtist
-                  ? "✎ You are drawing..."
-                  : "👀 Waiting for the artist..."}
-
-            </div>
-
             <canvas
-              ref={
-                canvasRef
-              }
+              ref={canvasRef}
+              className={`block h-full w-full touch-none ${
+                isArtist &&
+                phase === "drawing"
+                  ? "cursor-crosshair"
+                  : "cursor-default"
+              }`}
               onPointerDown={
                 handlePointerDown
               }
@@ -2129,345 +2101,297 @@ function Game() {
               onPointerCancel={
                 handlePointerUp
               }
-              onPointerLeave={
-                handlePointerUp
-              }
-              className="block h-full w-full touch-none"
             />
 
-          </div>
-
-          {/* Colors */}
-
-          <div className="flex flex-wrap items-center gap-2 px-1">
-
-            {colors.map(
-              (
-                color,
-                index
-              ) => (
-                <button
-                  key={`${color}-${index}`}
-                  type="button"
-                  aria-label={`Color ${index + 1}`}
-                  disabled={
-                    !isArtist ||
-                    phase !==
-                      "drawing"
-                  }
-                  onClick={() =>
-                    handleColorChange(
-                      color
-                    )
-                  }
-                  className={`h-8 w-8 rounded-full border-2 transition ${
-                    selectedColor ===
-                      color &&
-                    tool ===
-                      "draw"
-                      ? "border-[#111] ring-2 ring-white ring-offset-2 ring-offset-[#111]"
-                      : "border-black/10 hover:scale-110"
-                  } disabled:cursor-not-allowed disabled:opacity-40`}
-                  style={{
-                    backgroundColor:
-                      color,
-                  }}
-                />
-              )
-            )}
-
-          </div>
-
-          {/* Brush Tools */}
-
-          <div className="flex flex-wrap items-center gap-2 px-1">
-
-            <div className="flex items-center gap-2 rounded-full border-2 border-[#111] bg-white px-3 py-1.5 text-sm font-semibold">
-
-              <span>
-                Size:
-              </span>
-
-              {[4, 8, 16, 24].map(
-                (size) => (
-                  <button
-                    key={
-                      size
-                    }
-                    type="button"
-                    disabled={
-                      !isArtist ||
-                      phase !==
-                        "drawing"
-                    }
-                    onClick={() =>
-                      setBrushSize(
-                        size
-                      )
-                    }
-                    className={`flex h-7 w-7 items-center justify-center rounded-full ${
-                      brushSize ===
-                      size
-                        ? "bg-[#d4d4d4]"
-                        : ""
-                    } disabled:cursor-not-allowed disabled:opacity-40`}
-                  >
-                    <span
-                      className="block rounded-full bg-[#111]"
-                      style={{
-                        width: `${Math.min(
-                          size,
-                          20
-                        )}px`,
-
-                        height: `${Math.min(
-                          size,
-                          20
-                        )}px`,
-                      }}
-                    />
-                  </button>
-                )
-              )}
-
-            </div>
-
-            <button
-              type="button"
-              disabled={
-                !isArtist ||
-                phase !==
-                  "drawing"
-              }
-              onClick={
-                handleDraw
-              }
-              className={`rounded-full border-2 px-4 py-2 font-semibold ${
-                tool ===
-                "draw"
-                  ? "border-[#a2401c] bg-[#a2401c] text-white"
-                  : "border-[#111] bg-white"
-              } disabled:cursor-not-allowed disabled:opacity-40`}
-            >
-              ✎ Draw
-            </button>
-
-            <button
-              type="button"
-              disabled={
-                !isArtist ||
-                phase !==
-                  "drawing"
-              }
-              onClick={
-                handleEraser
-              }
-              className={`rounded-full border-2 px-4 py-2 font-semibold ${
-                tool ===
-                "eraser"
-                  ? "border-[#a2401c] bg-[#a2401c] text-white"
-                  : "border-[#111] bg-white"
-              } disabled:cursor-not-allowed disabled:opacity-40`}
-            >
-              Eraser
-            </button>
-
-            <button
-              type="button"
-              disabled
-              className="cursor-not-allowed rounded-full border-2 border-[#111] bg-white px-4 py-2 font-semibold opacity-40"
-            >
-              Bucket
-            </button>
-
-            <div className="flex-1" />
-
-            <button
-              type="button"
-              disabled={
-                !isArtist ||
-                phase !==
-                  "drawing"
-              }
-              onClick={
-                handleClear
-              }
-              className="rounded-full border-2 border-[#c62828] bg-white px-4 py-2 font-semibold text-[#c62828] transition hover:bg-[#fff1f1] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              🗑 Clear
-            </button>
-
-          </div>
-
-        </section>
-
-        {/* Guesses */}
-
-        <aside className="flex min-h-[500px] flex-col gap-3 rounded-[24px] bg-[#ebebeb] p-4">
-
-          <div className="px-1">
-
-            <h2 className="text-xl font-medium">
-              💬 Guesses
-            </h2>
-
-          </div>
-
-          <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
-
             {phase ===
-            "choosing" ? (
-              <>
-
-                <div className="flex justify-center bg-[#d4d4d4] px-3 py-2 text-xs">
-                  Round{" "}
-                  {currentRound}{" "}
-                  starting
+              "drawing" &&
+              !isArtist && (
+                <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full border-2 border-[#111] bg-white px-5 py-2 text-sm font-bold shadow-[0_3px_0_#111]">
+                  Hint: {hint}
                 </div>
+              )}
+          </div>
 
-                <div className="flex flex-1 items-center justify-center px-3 py-3 text-center text-sm text-[#666]">
-
-                  {isArtist
-                    ? "Choose one of the words to start drawing."
-                    : "The artist is choosing a word. Get ready!"}
-
-                </div>
-
-              </>
-            ) : (
-              <>
-
-                <div className="flex justify-center bg-[#d4d4d4] px-3 py-2 text-xs">
-                  Round{" "}
-                  {currentRound}{" "}
-                  started!
-                </div>
-
-                <div className="flex justify-center bg-white px-3 py-3 text-center text-sm text-[#666]">
-
-                  {isArtist
-                    ? "You are the artist. Draw something!"
-                    : hasGuessedCorrectly
-                      ? "🎉 You guessed correctly!"
-                      : "Watch the drawing and guess the word!"}
-
-                </div>
-
-                {guessMessages.map(
-                  (
-                    message,
-                    index
-                  ) => (
-                    <div
-                      key={`${message.playerName}-${index}`}
-                      className={`px-3 py-2 text-sm ${
-                        message.type ===
-                        "correct"
-                          ? "bg-[#e8f79c] font-bold"
+          {isArtist &&
+            phase ===
+              "drawing" && (
+              <div className="mt-4 rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={
+                        handleDraw
+                      }
+                      className={`flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-[#111] text-lg ${
+                        tool ===
+                        "draw"
+                          ? "bg-[#e0f878]"
                           : "bg-white"
                       }`}
                     >
+                      ✏️
+                    </button>
 
-                      {message.type ===
-                      "correct" ? (
-                        <>
-                          🎉{" "}
-                          {
-                            message.playerName
-                          }{" "}
-                          guessed correctly!
-                        </>
-                      ) : (
-                        <>
-                          <span className="font-bold">
-                            {
-                              message.playerName
-                            }
-                          </span>
+                    <button
+                      type="button"
+                      onClick={
+                        handleEraser
+                      }
+                      className={`flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-[#111] text-lg ${
+                        tool ===
+                        "eraser"
+                          ? "bg-[#e0f878]"
+                          : "bg-white"
+                      }`}
+                    >
+                      🧹
+                    </button>
+                  </div>
 
-                          :{" "}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-extrabold">
+                      Size
+                    </span>
 
-                          {
-                            message.guess
+                    {[4, 8, 14, 20].map(
+                      (size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() =>
+                            setBrushSize(
+                              size
+                            )
                           }
-                        </>
-                      )}
+                          className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#111] ${
+                            brushSize ===
+                            size
+                              ? "bg-[#e0f878]"
+                              : "bg-white"
+                          }`}
+                        >
+                          <span
+                            className="block rounded-full bg-[#111]"
+                            style={{
+                              width: `${Math.min(
+                                size,
+                                18
+                              )}px`,
+                              height: `${Math.min(
+                                size,
+                                18
+                              )}px`,
+                            }}
+                          />
+                        </button>
+                      )
+                    )}
+                  </div>
 
-                    </div>
-                  )
-                )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {colors.map(
+                      (color) => (
+                        <button
+                          key={
+                            color
+                          }
+                          type="button"
+                          onClick={() =>
+                            handleColorChange(
+                              color
+                            )
+                          }
+                          className={`h-8 w-8 rounded-full border-2 border-[#111] ${
+                            selectedColor ===
+                              color &&
+                            tool ===
+                              "draw"
+                              ? "ring-2 ring-[#111] ring-offset-2"
+                              : ""
+                          }`}
+                          style={{
+                            backgroundColor:
+                              color,
+                          }}
+                          aria-label={`Color ${color}`}
+                        />
+                      )
+                    )}
+                  </div>
 
-              </>
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={
+                        undoStackRef.current
+                          .length ===
+                          0 ||
+                        historyVersion <
+                          0
+                      }
+                      onClick={
+                        handleUndo
+                      }
+                      className="rounded-full border-[3px] border-[#111] bg-white px-4 py-2 font-extrabold transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Undo
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={
+                        redoStackRef.current
+                          .length ===
+                          0 ||
+                        historyVersion <
+                          0
+                      }
+                      onClick={
+                        handleRedo
+                      }
+                      className="rounded-full border-[3px] border-[#111] bg-white px-4 py-2 font-extrabold transition hover:bg-[#f2f2f2] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Redo
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={
+                        handleClear
+                      }
+                      className="rounded-full border-[3px] border-[#111] bg-[#f3d0d0] px-4 py-2 font-extrabold transition hover:bg-[#eabbbb]"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
+        </section>
 
+        <aside className="flex min-h-[500px] flex-col rounded-[20px] border-[3px] border-[#111] bg-white p-4 shadow-[0_4px_0_#111]">
+          <div className="mb-4">
+            <h2 className="text-xl font-extrabold">
+              Guesses
+            </h2>
+
+            <p className="text-xs text-[#777]">
+              {isArtist
+                ? "Watch the players guess."
+                : "Type your guess below."}
+            </p>
           </div>
 
-          {/* Guess Input */}
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+            {guessMessages.length ===
+              0 && (
+              <div className="rounded-[12px] bg-[#f4f4f4] px-3 py-4 text-center text-sm text-[#777]">
+                No guesses yet.
+              </div>
+            )}
 
-          <form
-            onSubmit={
-              handleGuessSubmit
-            }
-            className="flex items-center gap-2 rounded-full border-[3px] border-[#111] bg-white px-3 py-2"
-          >
+            {guessMessages.map(
+              (
+                message,
+                index
+              ) => {
+                if (
+                  message.type ===
+                  "correct"
+                ) {
+                  return (
+                    <div
+                      key={`${message.playerId || message.playerName}-${index}`}
+                      className="rounded-[12px] bg-[#e8f79c] px-3 py-2 text-sm"
+                    >
+                      <span className="font-extrabold">
+                        {
+                          message.playerName
+                        }
+                      </span>{" "}
+                      guessed correctly! 🎉
+                    </div>
+                  )
+                }
 
-            <input
-              type="text"
-              value={
-                guess
-              }
-              onChange={(
-                event
-              ) =>
-                setGuess(
-                  event.target
-                    .value
+                return (
+                  <div
+                    key={`${message.playerName}-${index}`}
+                    className="rounded-[12px] bg-[#f4f4f4] px-3 py-2 text-sm"
+                  >
+                    <span className="font-extrabold">
+                      {
+                        message.playerName
+                      }
+                    </span>
+                    :{" "}
+                    {
+                      message.guess
+                    }
+                  </div>
                 )
               }
-              disabled={
-                isArtist ||
-                phase !==
-                  "drawing" ||
-                hasGuessedCorrectly ||
-                timeRemaining <=
-                  0
-              }
-              placeholder={
-                phase ===
-                "choosing"
-                  ? "Wait for the word..."
-                  : isArtist
-                    ? "You are drawing..."
-                    : hasGuessedCorrectly
-                      ? "Correct!"
-                      : "Type your guess..."
-              }
-              className="min-w-0 flex-1 bg-transparent px-2 text-sm outline-none disabled:cursor-not-allowed"
-              autoComplete="off"
-            />
+            )}
+          </div>
 
-            <button
-              type="submit"
-              disabled={
-                isArtist ||
-                phase !==
-                  "drawing" ||
-                hasGuessedCorrectly ||
-                !guess.trim() ||
-                timeRemaining <=
-                  0
+          {!isArtist && (
+            <form
+              onSubmit={
+                handleGuessSubmit
               }
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#111] text-white transition hover:bg-[#333] disabled:cursor-not-allowed disabled:opacity-40"
+              className="mt-4 flex gap-2"
             >
-              🐾
-            </button>
+              <input
+                type="text"
+                value={guess}
+                onChange={(
+                  event
+                ) =>
+                  setGuess(
+                    event.target
+                      .value
+                  )
+                }
+                disabled={
+                  phase !==
+                    "drawing" ||
+                  hasGuessedCorrectly ||
+                  timeRemaining <=
+                    0
+                }
+                placeholder={
+                  hasGuessedCorrectly
+                    ? "Correct!"
+                    : "Type your guess..."
+                }
+                className="min-w-0 flex-1 rounded-full border-[3px] border-[#111] bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-[#e0f878] disabled:bg-[#eee]"
+              />
 
-          </form>
+              <button
+                type="submit"
+                disabled={
+                  phase !==
+                    "drawing" ||
+                  hasGuessedCorrectly ||
+                  timeRemaining <=
+                    0 ||
+                  !guess.trim()
+                }
+                className="rounded-full border-[3px] border-[#111] bg-[#e0f878] px-5 py-3 font-extrabold transition hover:bg-[#d0e868] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Guess
+              </button>
+            </form>
+          )}
 
+          {isArtist && (
+            <div className="mt-4 rounded-[14px] bg-[#f4f4f4] px-4 py-3 text-center text-sm font-bold text-[#666]">
+              You are the artist.
+            </div>
+          )}
         </aside>
-
       </main>
-
     </div>
   )
 }

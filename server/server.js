@@ -5,7 +5,6 @@ const { Server } = require("socket.io")
 
 const app = express()
 const server = http.createServer(app)
-
 const PORT = 3000
 
 app.use(cors())
@@ -21,6 +20,18 @@ const io = new Server(server, {
 const rooms = []
 const roomTimers = new Map()
 
+const WORD_CHOICE_TIME = 10
+
+// [FIX] ถ้าผู้เล่นเหลือน้อยกว่านี้ระหว่างเล่น ให้จบเกมทันที
+const MIN_PLAYERS_TO_CONTINUE = 2
+
+// [FIX] ห้องที่สร้างแล้วไม่มีใครเข้า socket จะถูกลบเมื่อเกินเวลานี้
+const EMPTY_ROOM_TTL = 2 * 60 * 1000
+const ROOM_CLEANUP_INTERVAL = 30 * 1000
+
+// [FIX] ห้อง Quick Match ที่เพิ่งสร้าง (ยังไม่มีคนเข้า) จะรับคนอื่นเข้ามาได้ภายในเวลานี้
+const QUICK_MATCH_GRACE = 30 * 1000
+
 const wordCategories = {
   Animals: [
     { word: "SLEEPING CAT", hint: "Animal, 2 words" },
@@ -31,7 +42,6 @@ const wordCategories = {
     { word: "GOLDEN FISH", hint: "Animal, 2 words" },
     { word: "WHITE RABBIT", hint: "Animal, 2 words" },
   ],
-
   Food: [
     { word: "PIZZA", hint: "Food, 1 word" },
     { word: "ICE CREAM", hint: "Dessert, 2 words" },
@@ -40,7 +50,6 @@ const wordCategories = {
     { word: "HOT DOG", hint: "Food, 2 words" },
     { word: "DONUT", hint: "Dessert, 1 word" },
   ],
-
   Nature: [
     { word: "RAINBOW", hint: "Nature, 1 word" },
     { word: "SUNFLOWER", hint: "Nature, 1 word" },
@@ -48,7 +57,6 @@ const wordCategories = {
     { word: "VOLCANO", hint: "Nature, 1 word" },
     { word: "MOUNTAIN", hint: "Nature, 1 word" },
   ],
-
   Objects: [
     { word: "TELEPHONE", hint: "Object, 1 word" },
     { word: "UMBRELLA", hint: "Object, 1 word" },
@@ -58,12 +66,6 @@ const wordCategories = {
   ],
 }
 
-/*
-|--------------------------------------------------------------------------
-| Random Word
-|--------------------------------------------------------------------------
-*/
-
 function getRandomWord(category) {
   let words = wordCategories[category]
 
@@ -71,18 +73,10 @@ function getRandomWord(category) {
     words = Object.values(wordCategories).flat()
   }
 
-  const randomIndex = Math.floor(
-    Math.random() * words.length
-  )
+  const randomIndex = Math.floor(Math.random() * words.length)
 
   return words[randomIndex]
 }
-
-/*
-|--------------------------------------------------------------------------
-| Get 3 Word Choices
-|--------------------------------------------------------------------------
-*/
 
 function getWordChoices(category) {
   let words = wordCategories[category]
@@ -98,12 +92,6 @@ function getWordChoices(category) {
   return shuffled.slice(0, 3)
 }
 
-/*
-|--------------------------------------------------------------------------
-| Generate Room Code
-|--------------------------------------------------------------------------
-*/
-
 function generateRoomCode() {
   const characters =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -112,37 +100,18 @@ function generateRoomCode() {
 
   for (let i = 0; i < 4; i++) {
     code += characters.charAt(
-      Math.floor(
-        Math.random() *
-          characters.length
-      )
+      Math.floor(Math.random() * characters.length)
     )
   }
 
   return code
 }
 
-/*
-|--------------------------------------------------------------------------
-| Find Room
-|--------------------------------------------------------------------------
-*/
-
 function getRoomByCode(code) {
   return rooms.find(
-    (room) =>
-      room.code ===
-      code.toUpperCase()
+    (room) => room.code === code.toUpperCase()
   )
 }
-
-/*
-|--------------------------------------------------------------------------
-| Public Room
-|
-| currentWord is NEVER sent to everyone.
-|--------------------------------------------------------------------------
-*/
 
 function getPublicRoom(room) {
   if (!room) return null
@@ -151,249 +120,182 @@ function getPublicRoom(room) {
     id: room.id,
     code: room.code,
     name: room.name,
-
-    drawingTime:
-      room.drawingTime,
-
-    rounds:
-      room.rounds,
-
-    category:
-      room.category,
-
-    maxPlayers:
-      room.maxPlayers,
-
-    players:
-      room.players,
-
-    status:
-      room.status,
-
-    phase:
-      room.phase,
-
-    currentRound:
-      room.currentRound,
-
-    artistId:
-      room.artistId,
-
-    roundStartedAt:
-      room.roundStartedAt,
-
-    roundEndsAt:
-      room.roundEndsAt,
-
-    currentHint:
-      room.currentHint,
-
-    correctGuessers:
-      room.correctGuessers,
+    drawingTime: room.drawingTime,
+    rounds: room.rounds,
+    category: room.category,
+    maxPlayers: room.maxPlayers,
+    players: room.players,
+    status: room.status,
+    phase: room.phase,
+    currentRound: room.currentRound,
+    artistId: room.artistId,
+    artistIndex: room.artistIndex,
+    roundStartedAt: room.roundStartedAt,
+    roundEndsAt: room.roundEndsAt,
+    currentHint: room.currentHint,
+    correctGuessers: room.correctGuessers,
+    gameStartedAt: room.gameStartedAt,
+    gameFinishedAt: room.gameFinishedAt,
+    matchDurationMs: room.matchDurationMs,
   }
 }
-
-/*
-|--------------------------------------------------------------------------
-| Broadcast Players
-|--------------------------------------------------------------------------
-*/
 
 function broadcastPlayers(room) {
   if (!room) return
 
   console.log(
     `Broadcast players in room ${room.code}:`,
-    room.players.map(
-      (player) => player.name
-    )
+    room.players.map((player) => player.name)
   )
 
-  io.to(room.code).emit(
-    "playersUpdated",
-    {
-      players:
-        room.players,
-    }
-  )
+  io.to(room.code).emit("playersUpdated", {
+    players: room.players,
+  })
 }
-
-/*
-|--------------------------------------------------------------------------
-| Clear Timer
-|--------------------------------------------------------------------------
-*/
 
 function clearRoomTimer(roomCode) {
-  const timer =
-    roomTimers.get(roomCode)
+  const timer = roomTimers.get(roomCode)
 
   if (timer) {
+    clearTimeout(timer)
     clearInterval(timer)
-
-    roomTimers.delete(
-      roomCode
-    )
+    roomTimers.delete(roomCode)
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| Select Next Artist
-|--------------------------------------------------------------------------
-*/
+// [FIX] เช็กว่าคนทายที่เหลืออยู่ทายถูกครบทุกคนหรือยัง
+function haveAllGuessersGuessed(room) {
+  const guessers = room.players.filter(
+    (item) => item.id !== room.artistId
+  )
 
-function getNextArtist(room) {
-  const players =
-    room.players
-
-  if (
-    players.length === 0
-  ) {
-    return null
-  }
-
-  /*
-  | Prefer someone who was NOT the previous artist.
-  */
-
-  const availablePlayers =
-    players.filter(
-      (player) =>
-        player.id !==
-        room.artistId
+  return (
+    guessers.length > 0 &&
+    guessers.every((item) =>
+      room.correctGuessers.includes(item.id)
     )
-
-  const candidates =
-    availablePlayers.length > 0
-      ? availablePlayers
-      : players
-
-  const randomIndex =
-    Math.floor(
-      Math.random() *
-        candidates.length
-    )
-
-  return candidates[
-    randomIndex
-  ]
+  )
 }
 
 /*
-|--------------------------------------------------------------------------
-| START ROUND
-|
-| This does NOT start the timer.
-|
-| It starts the Choosing Word phase.
-|--------------------------------------------------------------------------
-*/
-
+ * [FIX] 1 รอบ (round) = ผู้เล่นทุกคนได้วาดครบคนละ 1 turn
+ *
+ * room.drawnThisRound เก็บ id ของคนที่วาดไปแล้วในรอบนี้
+ * turn ถัดไปคือผู้เล่นคนแรกในลำดับที่ยังไม่ได้วาด
+ * ถ้าทุกคนวาดครบแล้ว จะขึ้นรอบใหม่ หรือจบเกมถ้าครบทุกรอบ
+ *
+ * วิธีนี้ทำงานถูกต้องแม้มีคนออกกลางเกม
+ */
 function startRound(room) {
-  if (!room) return
-
-  if (
-    room.players.length === 0
-  ) {
+  if (!room || room.players.length === 0) {
     return
   }
 
-  const artist =
-    getNextArtist(room)
+  let artist = room.players.find(
+    (player) =>
+      !room.drawnThisRound.includes(player.id)
+  )
+
+  if (!artist) {
+    if (room.currentRound >= room.rounds) {
+      finishGame(room)
+      return
+    }
+
+    room.currentRound += 1
+    room.drawnThisRound = []
+    artist = room.players[0]
+  }
 
   if (!artist) {
     return
   }
 
-  clearRoomTimer(
-    room.code
+  clearRoomTimer(room.code)
+
+  room.drawnThisRound.push(artist.id)
+
+  room.artistIndex = room.players.findIndex(
+    (player) => player.id === artist.id
   )
 
-  room.artistId =
-    artist.id
-
-  room.currentWord =
-    null
-
-  room.currentHint =
-    null
-
-  room.currentChoices =
-    getWordChoices(
-      room.category
-    )
-
-  room.correctGuessers =
-    []
-
-  room.phase =
-    "choosing"
-
-  room.roundStartedAt =
-    null
-
-  room.roundEndsAt =
-    null
+  room.artistId = artist.id
+  room.currentWord = null
+  room.currentHint = null
+  room.currentChoices = getWordChoices(
+    room.category
+  )
+  room.correctGuessers = []
+  room.phase = "choosing"
+  room.roundStartedAt = null
+  room.roundEndsAt = null
 
   console.log(
     `Round ${room.currentRound} choosing in room ${room.code}`
   )
 
-  console.log(
-    `Artist: ${artist.name}`
-  )
+  console.log(`Artist: ${artist.name}`)
 
   console.log(
     "Word choices:",
     room.currentChoices.map(
-      (item) =>
-        item.word
+      (item) => item.word
     )
   )
 
-  /*
-  |--------------------------------------------------------------------------
-  | Tell everyone that the artist is choosing
-  |--------------------------------------------------------------------------
-  */
+  io.to(room.code).emit("roundChoosing", {
+    room: getPublicRoom(room),
+    currentRound: room.currentRound,
+    artistId: room.artistId,
+  })
 
-  io.to(room.code).emit(
-    "roundChoosing",
-    {
-      room:
-        getPublicRoom(room),
+  io.to(room.artistId).emit("wordChoices", {
+    choices: room.currentChoices,
+  })
 
-      currentRound:
-        room.currentRound,
+  const choiceTimer = setTimeout(() => {
+    const currentRoom = getRoomByCode(
+      room.code
+    )
 
-      artistId:
-        room.artistId,
+    if (!currentRoom) return
+
+    if (currentRoom.phase !== "choosing") {
+      return
     }
-  )
 
-  /*
-  |--------------------------------------------------------------------------
-  | Only artist gets the actual choices
-  |--------------------------------------------------------------------------
-  */
-
-  io.to(room.artistId).emit(
-    "wordChoices",
-    {
-      choices:
-        room.currentChoices,
+    if (currentRoom.artistId !== artist.id) {
+      return
     }
+
+    if (
+      currentRoom.currentChoices.length === 0
+    ) {
+      return
+    }
+
+    const automaticChoice =
+      currentRoom.currentChoices[0]
+
+    console.log(
+      `Artist did not choose a word in room ${currentRoom.code}`
+    )
+
+    console.log(
+      `Automatically selecting: ${automaticChoice.word}`
+    )
+
+    startDrawingPhase(
+      currentRoom,
+      automaticChoice
+    )
+  }, WORD_CHOICE_TIME * 1000)
+
+  roomTimers.set(
+    room.code,
+    choiceTimer
   )
 }
-
-/*
-|--------------------------------------------------------------------------
-| START DRAWING
-|
-| Called AFTER artist selects a word.
-|--------------------------------------------------------------------------
-*/
 
 function startDrawingPhase(
   room,
@@ -401,62 +303,38 @@ function startDrawingPhase(
 ) {
   if (!room) return
 
-  if (
-    room.phase !==
-    "choosing"
-  ) {
+  if (room.phase !== "choosing") {
     return
   }
 
-  if (
-    !selectedWord ||
-    !selectedWord.word
-  ) {
+  if (!selectedWord || !selectedWord.word) {
     return
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Make sure selected word came from the 3 choices
-  |--------------------------------------------------------------------------
-  */
 
   const validChoice =
     room.currentChoices.find(
       (choice) =>
-        choice.word ===
-        selectedWord.word
+        choice.word === selectedWord.word
     )
 
   if (!validChoice) {
     return
   }
 
-  room.currentWord =
-    validChoice.word
+  clearRoomTimer(room.code)
 
-  room.currentHint =
-    validChoice.hint
+  room.currentWord = validChoice.word
+  room.currentHint = validChoice.hint
+  room.currentChoices = []
+  room.correctGuessers = []
+  room.phase = "drawing"
 
-  room.currentChoices =
-    []
+  const now = Date.now()
 
-  room.correctGuessers =
-    []
-
-  room.phase =
-    "drawing"
-
-  const now =
-    Date.now()
-
-  room.roundStartedAt =
-    now
+  room.roundStartedAt = now
 
   room.roundEndsAt =
-    now +
-    room.drawingTime *
-      1000
+    now + room.drawingTime * 1000
 
   console.log(
     `Drawing started in room ${room.code}`
@@ -471,117 +349,67 @@ function startDrawingPhase(
   )
 
   /*
-  |--------------------------------------------------------------------------
-  | Tell everyone drawing has started
-  |--------------------------------------------------------------------------
-  */
+   * สร้าง pattern สำหรับหน้า Game
+   *
+   * ตัวอักษร = ＿
+   * space = เว้นว่าง
+   *
+   * เช่น
+   * ICE CREAM
+   * ↓
+   * ＿ ＿ ＿  ＿ ＿ ＿ ＿ ＿
+   */
+  const wordPattern = room.currentWord
+    .split("")
+    .map((char) =>
+      char === " " ? " " : "＿"
+    )
+    .join("")
 
-  io.to(room.code).emit(
-    "roundStarted",
-    {
-      room:
-        getPublicRoom(room),
+  io.to(room.code).emit("roundStarted", {
+    room: getPublicRoom(room),
+    currentRound: room.currentRound,
+    artistId: room.artistId,
+    roundStartedAt: room.roundStartedAt,
+    roundEndsAt: room.roundEndsAt,
+    hint: room.currentHint,
+    wordPattern,
+  })
 
-      currentRound:
-        room.currentRound,
-
-      artistId:
-        room.artistId,
-
-      roundStartedAt:
-        room.roundStartedAt,
-
-      roundEndsAt:
-        room.roundEndsAt,
-
-      hint:
-        room.currentHint,
-
-      wordLength:
-        room.currentWord.length,
-    }
-  )
-
-  /*
-  |--------------------------------------------------------------------------
-  | Only artist gets the answer
-  |--------------------------------------------------------------------------
-  */
-
-  io.to(room.artistId).emit(
-    "artistWord",
-    {
-      word:
-        room.currentWord,
-    }
-  )
-
-  /*
-  |--------------------------------------------------------------------------
-  | Clear canvas
-  |--------------------------------------------------------------------------
-  */
+  io.to(room.artistId).emit("artistWord", {
+    word: room.currentWord,
+  })
 
   io.to(room.code).emit(
     "clearCanvas"
   )
 
-  /*
-  |--------------------------------------------------------------------------
-  | Start server timer
-  |--------------------------------------------------------------------------
-  */
+  clearRoomTimer(room.code)
 
-  clearRoomTimer(
-    room.code
-  )
+  const timer = setInterval(() => {
+    const currentRoom = getRoomByCode(
+      room.code
+    )
 
-  const timer =
-    setInterval(() => {
-      const currentRoom =
-        getRoomByCode(
-          room.code
-        )
+    if (!currentRoom) {
+      clearRoomTimer(room.code)
+      return
+    }
 
-      if (!currentRoom) {
-        clearRoomTimer(
-          room.code
-        )
+    if (currentRoom.phase !== "drawing") {
+      clearRoomTimer(room.code)
+      return
+    }
 
-        return
-      }
+    const remaining =
+      currentRoom.roundEndsAt -
+      Date.now()
 
-      /*
-      | Stop if phase changed
-      */
-
-      if (
-        currentRoom.phase !==
-        "drawing"
-      ) {
-        clearRoomTimer(
-          room.code
-        )
-
-        return
-      }
-
-      const remaining =
-        currentRoom.roundEndsAt -
-        Date.now()
-
-      if (
-        remaining <= 0
-      ) {
-        clearRoomTimer(
-          room.code
-        )
-
-        nextRound(
-          currentRoom
-        )
-      }
-    }, 250)
+    if (remaining <= 0) {
+      clearRoomTimer(room.code)
+      nextRound(currentRoom)
+    }
+  }, 250)
 
   roomTimers.set(
     room.code,
@@ -589,84 +417,56 @@ function startDrawingPhase(
   )
 }
 
-/*
-|--------------------------------------------------------------------------
-| NEXT ROUND
-|--------------------------------------------------------------------------
-*/
+function finishGame(room) {
+  if (!room) return
+
+  clearRoomTimer(room.code)
+
+  room.status = "finished"
+  room.phase = "finished"
+  room.gameFinishedAt = Date.now()
+
+  if (room.gameStartedAt) {
+    room.matchDurationMs = Math.max(
+      0,
+      room.gameFinishedAt -
+        room.gameStartedAt
+    )
+  } else {
+    room.matchDurationMs = 0
+  }
+
+  room.artistId = null
+  room.currentWord = null
+  room.currentHint = null
+  room.currentChoices = []
+  room.roundStartedAt = null
+  room.roundEndsAt = null
+
+  console.log(
+    `Game finished in room ${room.code}`
+  )
+
+  console.log(
+    `Match duration: ${room.matchDurationMs} ms`
+  )
+
+  io.to(room.code).emit(
+    "gameFinished",
+    {
+      room: getPublicRoom(room),
+    }
+  )
+}
 
 function nextRound(room) {
   if (!room) return
 
-  clearRoomTimer(
-    room.code
-  )
+  clearRoomTimer(room.code)
 
-  /*
-  |--------------------------------------------------------------------------
-  | Game finished
-  |--------------------------------------------------------------------------
-  */
-
-  if (
-    room.currentRound >=
-    room.rounds
-  ) {
-    room.status =
-      "finished"
-
-    room.phase =
-      "finished"
-
-    room.artistId =
-      null
-
-    room.currentWord =
-      null
-
-    room.currentHint =
-      null
-
-    room.currentChoices =
-      []
-
-    room.roundStartedAt =
-      null
-
-    room.roundEndsAt =
-      null
-
-    console.log(
-      `Game finished in room ${room.code}`
-    )
-
-    io.to(room.code).emit(
-      "gameFinished",
-      {
-        room:
-          getPublicRoom(room),
-      }
-    )
-
-    return
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Next player / round
-  |--------------------------------------------------------------------------
-  */
-
-  room.currentRound += 1
-
+  // [FIX] startRound จัดการขึ้นรอบใหม่ / จบเกมเองแล้ว
   startRound(room)
 }
-
-/*
-|--------------------------------------------------------------------------
-| API
-|--------------------------------------------------------------------------
-*/
 
 app.get("/", (req, res) => {
   res.send(
@@ -674,878 +474,701 @@ app.get("/", (req, res) => {
   )
 })
 
-app.get(
-  "/api/rooms",
-  (req, res) => {
-    res.json({
-      success: true,
-      rooms,
+// [FIX] ใช้ getPublicRoom เพื่อไม่ให้ currentWord / currentChoices รั่วไปฝั่ง client
+app.get("/api/rooms", (req, res) => {
+  res.json({
+    success: true,
+    rooms: rooms.map(getPublicRoom),
+  })
+})
+
+// [FIX] แยกการสร้างห้องออกมา ใช้ร่วมกันระหว่าง Create Room กับ Quick Match
+function createRoom({
+  roomName,
+  drawingTime,
+  rounds,
+  category,
+  maxPlayers,
+  isQuickMatch = false,
+}) {
+  let code = generateRoomCode()
+
+  while (getRoomByCode(code)) {
+    code = generateRoomCode()
+  }
+
+  const room = {
+    id: Date.now().toString(),
+    code,
+    name: roomName.trim(),
+    drawingTime:
+      drawingTime || 60,
+    rounds: rounds || 5,
+    category:
+      category || "Animals",
+    maxPlayers:
+      maxPlayers || 8,
+    players: [],
+    status: "waiting",
+    phase: "waiting",
+    currentRound: 0,
+    artistIndex: -1,
+    artistId: null,
+    roundStartedAt: null,
+    roundEndsAt: null,
+    currentWord: null,
+    currentHint: null,
+    currentChoices: [],
+    correctGuessers: [],
+    drawnThisRound: [],
+    gameStartedAt: null,
+    gameFinishedAt: null,
+    matchDurationMs: 0,
+    createdAt: Date.now(),
+    isQuickMatch,
+  }
+
+  rooms.push(room)
+
+  console.log(
+    `Room created: ${room.code}`
+  )
+
+  return room
+}
+
+app.post("/api/rooms", (req, res) => {
+  const {
+    roomName,
+    drawingTime,
+    rounds,
+    category,
+    maxPlayers,
+  } = req.body
+
+  if (
+    !roomName ||
+    !roomName.trim()
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Room name is required",
     })
   }
-)
 
-app.post(
-  "/api/rooms",
-  (req, res) => {
-    const {
-      roomName,
-      drawingTime,
-      rounds,
-      category,
-      maxPlayers,
-    } = req.body
+  const room = createRoom({
+    roomName,
+    drawingTime,
+    rounds,
+    category,
+    maxPlayers,
+  })
 
-    if (
-      !roomName ||
-      !roomName.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Room name is required",
-      })
-    }
+  res.status(201).json({
+    success: true,
+    room: getPublicRoom(room),
+  })
+})
 
-    let code =
-      generateRoomCode()
+/*
+ * [FIX] Quick Match
+ *
+ * 1. หาห้องที่ยังรออยู่และไม่เต็ม โดยเลือกห้องที่มีคนมากที่สุด
+ *    (รวมห้อง Quick Match ที่เพิ่งสร้างและยังไม่มีคน เพื่อให้คนที่กดพร้อมกันได้อยู่ห้องเดียวกัน)
+ * 2. ถ้าไม่มีห้องที่เข้าได้เลย สร้างห้องใหม่ให้
+ */
+app.post("/api/rooms/quick-match", (req, res) => {
+  const now = Date.now()
 
-    while (
-      getRoomByCode(code)
-    ) {
-      code =
-        generateRoomCode()
-    }
+  const candidates = rooms
+    .filter((room) => {
+      if (room.status !== "waiting") {
+        return false
+      }
 
-    const room = {
-      id:
-        Date.now().toString(),
+      if (room.players.length >= room.maxPlayers) {
+        return false
+      }
 
-      code,
+      if (room.players.length > 0) {
+        return true
+      }
 
-      name:
-        roomName.trim(),
-
-      drawingTime:
-        drawingTime || 60,
-
-      rounds:
-        rounds || 5,
-
-      category:
-        category || "Animals",
-
-      maxPlayers:
-        maxPlayers || 8,
-
-      players: [],
-
-      status:
-        "waiting",
-
-      phase:
-        "waiting",
-
-      currentRound:
-        0,
-
-      artistId:
-        null,
-
-      roundStartedAt:
-        null,
-
-      roundEndsAt:
-        null,
-
-      currentWord:
-        null,
-
-      currentHint:
-        null,
-
-      currentChoices:
-        [],
-
-      correctGuessers:
-        [],
-    }
-
-    rooms.push(room)
-
-    console.log(
-      `Room created: ${room.code}`
+      return (
+        room.isQuickMatch &&
+        now - room.createdAt < QUICK_MATCH_GRACE
+      )
+    })
+    .sort(
+      (a, b) =>
+        b.players.length - a.players.length
     )
 
-    res.status(201).json({
+  if (candidates.length > 0) {
+    return res.json({
       success: true,
-
-      room:
-        getPublicRoom(room),
+      created: false,
+      room: getPublicRoom(candidates[0]),
     })
   }
-)
+
+  const room = createRoom({
+    roomName: "Quick Match",
+    drawingTime: 60,
+    rounds: 2,
+    category: "Random",
+    maxPlayers: 8,
+    isQuickMatch: true,
+  })
+
+  res.status(201).json({
+    success: true,
+    created: true,
+    room: getPublicRoom(room),
+  })
+})
 
 app.get(
   "/api/rooms/:code",
   (req, res) => {
-    const room =
-      getRoomByCode(
-        req.params.code
-      )
+    const room = getRoomByCode(
+      req.params.code
+    )
 
     if (!room) {
       return res.status(404).json({
         success: false,
-        message:
-          "Room not found",
+        message: "Room not found",
       })
     }
 
     res.json({
       success: true,
-
-      room:
-        getPublicRoom(room),
+      room: getPublicRoom(room),
     })
   }
 )
 
-/*
-|--------------------------------------------------------------------------
-| Socket.IO
-|--------------------------------------------------------------------------
-*/
+io.on("connection", (socket) => {
+  console.log(
+    "User connected:",
+    socket.id
+  )
 
-io.on(
-  "connection",
-  (socket) => {
-    console.log(
-      "User connected:",
-      socket.id
-    )
+  socket.on(
+    "joinRoom",
+    ({ roomCode, player }) => {
+      const room =
+        getRoomByCode(roomCode)
 
-    /*
-    |--------------------------------------------------------------------------
-    | Join Room
-    |--------------------------------------------------------------------------
-    */
+      if (!room) {
+        socket.emit("roomError", {
+          message: "Room not found",
+        })
+        return
+      }
 
-    socket.on(
-      "joinRoom",
-      ({
-        roomCode,
-        player,
-      }) => {
-        const room =
-          getRoomByCode(
-            roomCode
-          )
-
-        if (!room) {
-          socket.emit(
-            "roomError",
-            {
-              message:
-                "Room not found",
-            }
-          )
-
-          return
-        }
-
-        /*
-        | Already joined
-        */
-
-        const existingPlayer =
-          room.players.find(
-            (item) =>
-              item.id ===
-              socket.id
-          )
-
-        if (existingPlayer) {
-          console.log(
-            `${socket.id} already joined room ${room.code}`
-          )
-
-          socket.roomCode =
-            room.code
-
-          socket.join(
-            room.code
-          )
-
-          socket.emit(
-            "roomJoined",
-            {
-              room:
-                getPublicRoom(
-                  room
-                ),
-            }
-          )
-
-          broadcastPlayers(
-            room
-          )
-
-          return
-        }
-
-        /*
-        | Do not allow new players after game starts.
-        */
-
-        if (
-          room.status !==
-          "waiting"
-        ) {
-          socket.emit(
-            "roomError",
-            {
-              message:
-                "Game has already started",
-            }
-          )
-
-          return
-        }
-
-        /*
-        | Room full
-        */
-
-        if (
-          room.players.length >=
-          room.maxPlayers
-        ) {
-          socket.emit(
-            "roomError",
-            {
-              message:
-                "Room is full",
-            }
-          )
-
-          return
-        }
-
-        const newPlayer = {
-          id:
-            socket.id,
-
-          name:
-            player?.name ||
-            "Player",
-
-          fur:
-            player?.fur ||
-            "default",
-
-          ears:
-            player?.ears ||
-            "default",
-
-          costume:
-            player?.costume ||
-            "default",
-
-          isHost:
-            room.players.length ===
-            0,
-
-          score:
-            0,
-        }
-
-        room.players.push(
-          newPlayer
+      const existingPlayer =
+        room.players.find(
+          (item) =>
+            item.id === socket.id
         )
 
-        socket.join(
-          room.code
+      if (existingPlayer) {
+        console.log(
+          `${socket.id} already joined room ${room.code}`
         )
 
         socket.roomCode =
           room.code
 
-        console.log(
-          `${newPlayer.name} joined room ${room.code}`
+        socket.join(room.code)
+
+        socket.emit("roomJoined", {
+          room: getPublicRoom(room),
+        })
+
+        broadcastPlayers(room)
+
+        return
+      }
+
+      if (room.status !== "waiting") {
+        socket.emit("roomError", {
+          message:
+            "Game has already started",
+        })
+
+        return
+      }
+
+      if (
+        room.players.length >=
+        room.maxPlayers
+      ) {
+        socket.emit("roomError", {
+          message: "Room is full",
+        })
+
+        return
+      }
+
+      const newPlayer = {
+        id: socket.id,
+        name:
+          player?.name ||
+          "Player",
+        fur:
+          player?.fur ||
+          "default",
+        ears:
+          player?.ears ||
+          "default",
+        costume:
+          player?.costume ||
+          "default",
+        isHost:
+          room.players.length ===
+          0,
+        score: 0,
+      }
+
+      room.players.push(
+        newPlayer
+      )
+
+      socket.join(room.code)
+
+      socket.roomCode =
+        room.code
+
+      console.log(
+        `${newPlayer.name} joined room ${room.code}`
+      )
+
+      console.log(
+        "Current players:",
+        room.players.map(
+          (player) =>
+            `${player.name} (${player.id})`
+        )
+      )
+
+      socket.emit("roomJoined", {
+        room: getPublicRoom(room),
+      })
+
+      broadcastPlayers(room)
+
+      socket
+        .to(room.code)
+        .emit("playerJoined", {
+          player: newPlayer,
+        })
+    }
+  )
+
+  socket.on(
+    "startGame",
+    () => {
+      if (!socket.roomCode) return
+
+      const room = getRoomByCode(
+        socket.roomCode
+      )
+
+      if (!room) return
+
+      const player =
+        room.players.find(
+          (item) =>
+            item.id === socket.id
         )
 
-        console.log(
-          "Current players:",
-          room.players.map(
-            (player) =>
-              `${player.name} (${player.id})`
-          )
-        )
+      if (!player) return
 
+      if (!player.isHost) {
         socket.emit(
-          "roomJoined",
+          "roomError",
           {
-            room:
-              getPublicRoom(
-                room
-              ),
+            message:
+              "Only the host can start the game",
           }
         )
 
-        broadcastPlayers(
-          room
+        return
+      }
+
+      if (
+        room.players.length < 4
+      ) {
+        socket.emit(
+          "roomError",
+          {
+            message:
+              "At least 4 players are required",
+          }
         )
 
-        socket
-          .to(room.code)
-          .emit(
-            "playerJoined",
-            {
-              player:
-                newPlayer,
-            }
-          )
+        return
       }
-    )
 
-    /*
-    |--------------------------------------------------------------------------
-    | Start Game
-    |--------------------------------------------------------------------------
-    */
+      // [FIX] กัน host ยิง startGame ซ้ำระหว่างเกมกำลังเล่น
+      if (room.status !== "waiting") {
+        return
+      }
 
-    socket.on(
-      "startGame",
-      () => {
-        if (
-          !socket.roomCode
-        ) {
-          return
-        }
+      room.status = "playing"
+      room.currentRound = 1
+      room.artistIndex = -1
+      room.artistId = null
+      room.drawnThisRound = []
+      room.gameStartedAt =
+        Date.now()
+      room.gameFinishedAt = null
+      room.matchDurationMs = 0
 
-        const room =
-          getRoomByCode(
-            socket.roomCode
+      console.log(
+        `Game started in room ${room.code}`
+      )
+
+      console.log(
+        `Game started at: ${room.gameStartedAt}`
+      )
+
+      startRound(room)
+    }
+  )
+
+  socket.on(
+    "selectWord",
+    ({ word, hint }) => {
+      if (!socket.roomCode) return
+
+      const room = getRoomByCode(
+        socket.roomCode
+      )
+
+      if (!room) return
+
+      if (
+        room.status !== "playing"
+      ) {
+        return
+      }
+
+      if (
+        room.phase !== "choosing"
+      ) {
+        return
+      }
+
+      if (
+        room.artistId !==
+        socket.id
+      ) {
+        return
+      }
+
+      const selectedWord =
+        room.currentChoices.find(
+          (choice) =>
+            choice.word === word
+        )
+
+      if (!selectedWord) {
+        socket.emit(
+          "roomError",
+          {
+            message:
+              "Invalid word choice",
+          }
+        )
+
+        return
+      }
+
+      startDrawingPhase(
+        room,
+        selectedWord
+      )
+    }
+  )
+
+  socket.on(
+    "draw",
+    (data) => {
+      if (!socket.roomCode) return
+
+      const room = getRoomByCode(
+        socket.roomCode
+      )
+
+      if (!room) return
+
+      if (
+        room.status !== "playing"
+      ) {
+        return
+      }
+
+      if (
+        room.phase !== "drawing"
+      ) {
+        return
+      }
+
+      if (
+        room.artistId !==
+        socket.id
+      ) {
+        return
+      }
+
+      socket
+        .to(room.code)
+        .emit("draw", data)
+    }
+  )
+
+  socket.on(
+    "clearCanvas",
+    () => {
+      if (!socket.roomCode) return
+
+      const room = getRoomByCode(
+        socket.roomCode
+      )
+
+      if (!room) return
+
+      if (
+        room.status !== "playing"
+      ) {
+        return
+      }
+
+      if (
+        room.phase !== "drawing"
+      ) {
+        return
+      }
+
+      if (
+        room.artistId !==
+        socket.id
+      ) {
+        return
+      }
+
+      socket
+        .to(room.code)
+        .emit(
+          "clearCanvas"
+        )
+    }
+  )
+
+  socket.on(
+    "guess",
+    ({ guess }) => {
+      if (!socket.roomCode) return
+
+      const room = getRoomByCode(
+        socket.roomCode
+      )
+
+      if (!room) return
+
+      if (
+        room.status !== "playing"
+      ) {
+        return
+      }
+
+      if (
+        room.phase !== "drawing"
+      ) {
+        return
+      }
+
+      if (
+        room.artistId ===
+        socket.id
+      ) {
+        return
+      }
+
+      if (!room.currentWord) {
+        return
+      }
+
+      if (
+        room.correctGuessers.includes(
+          socket.id
+        )
+      ) {
+        return
+      }
+
+      if (
+        typeof guess !==
+        "string"
+      ) {
+        return
+      }
+
+      const cleanGuess =
+        guess
+          .trim()
+          .toUpperCase()
+
+      if (!cleanGuess) return
+
+      const correctWord =
+        room.currentWord
+          .trim()
+          .toUpperCase()
+
+      const player =
+        room.players.find(
+          (item) =>
+            item.id === socket.id
+        )
+
+      if (!player) return
+
+      if (
+        cleanGuess ===
+        correctWord
+      ) {
+        room.correctGuessers.push(
+          socket.id
+        )
+
+        const timeLeft =
+          Math.max(
+            0,
+            room.roundEndsAt -
+              Date.now()
           )
 
-        if (!room) {
-          return
+        const maxTime =
+          room.drawingTime *
+          1000
+
+        const score =
+          Math.max(
+            100,
+            Math.round(
+              500 +
+                (timeLeft /
+                  maxTime) *
+                  500
+            )
+          )
+
+        if (
+          typeof player.score !==
+          "number"
+        ) {
+          player.score = 0
         }
 
-        const player =
+        player.score += score
+
+        // [FIX] artist ได้ 100 คะแนนต่อคนที่ทายถูก
+        const artistPlayer =
           room.players.find(
             (item) =>
               item.id ===
-              socket.id
+              room.artistId
           )
 
-        if (!player) {
-          return
-        }
-
-        if (
-          !player.isHost
-        ) {
-          socket.emit(
-            "roomError",
-            {
-              message:
-                "Only the host can start the game",
-            }
-          )
-
-          return
-        }
-
-        if (
-          room.players.length <
-          4
-        ) {
-          socket.emit(
-            "roomError",
-            {
-              message:
-                "At least 4 players are required",
-            }
-          )
-
-          return
-        }
-
-        room.status =
-          "playing"
-
-        room.currentRound =
-          1
-
-        room.artistId =
-          null
-
-        startRound(room)
-      }
-    )
-
-    /*
-    |--------------------------------------------------------------------------
-    | Artist Selects Word
-    |--------------------------------------------------------------------------
-    */
-
-    socket.on(
-      "selectWord",
-      ({
-        word,
-        hint,
-      }) => {
-        if (
-          !socket.roomCode
-        ) {
-          return
-        }
-
-        const room =
-          getRoomByCode(
-            socket.roomCode
-          )
-
-        if (!room) {
-          return
-        }
-
-        if (
-          room.status !==
-          "playing"
-        ) {
-          return
-        }
-
-        if (
-          room.phase !==
-          "choosing"
-        ) {
-          return
-        }
-
-        if (
-          room.artistId !==
-          socket.id
-        ) {
-          return
-        }
-
-        const selectedWord =
-          room.currentChoices.find(
-            (choice) =>
-              choice.word ===
-              word
-          )
-
-        if (!selectedWord) {
-          socket.emit(
-            "roomError",
-            {
-              message:
-                "Invalid word choice",
-            }
-          )
-
-          return
-        }
-
-        startDrawingPhase(
-          room,
-          selectedWord
-        )
-      }
-    )
-
-    /*
-    |--------------------------------------------------------------------------
-    | Drawing
-    |--------------------------------------------------------------------------
-    */
-
-    socket.on(
-      "draw",
-      (data) => {
-        if (
-          !socket.roomCode
-        ) {
-          return
-        }
-
-        const room =
-          getRoomByCode(
-            socket.roomCode
-          )
-
-        if (!room) {
-          return
-        }
-
-        if (
-          room.status !==
-          "playing"
-        ) {
-          return
-        }
-
-        if (
-          room.phase !==
-          "drawing"
-        ) {
-          return
-        }
-
-        if (
-          room.artistId !==
-          socket.id
-        ) {
-          return
-        }
-
-        socket
-          .to(room.code)
-          .emit(
-            "draw",
-            data
-          )
-      }
-    )
-
-    /*
-    |--------------------------------------------------------------------------
-    | Clear Canvas
-    |--------------------------------------------------------------------------
-    */
-
-    socket.on(
-      "clearCanvas",
-      () => {
-        if (
-          !socket.roomCode
-        ) {
-          return
-        }
-
-        const room =
-          getRoomByCode(
-            socket.roomCode
-          )
-
-        if (!room) {
-          return
-        }
-
-        if (
-          room.status !==
-          "playing"
-        ) {
-          return
-        }
-
-        if (
-          room.phase !==
-          "drawing"
-        ) {
-          return
-        }
-
-        if (
-          room.artistId !==
-          socket.id
-        ) {
-          return
-        }
-
-        socket
-          .to(room.code)
-          .emit(
-            "clearCanvas"
-          )
-      }
-    )
-
-    /*
-    |--------------------------------------------------------------------------
-    | Guess
-    |--------------------------------------------------------------------------
-    */
-
-    socket.on(
-      "guess",
-      ({
-        guess,
-      }) => {
-        if (
-          !socket.roomCode
-        ) {
-          return
-        }
-
-        const room =
-          getRoomByCode(
-            socket.roomCode
-          )
-
-        if (!room) {
-          return
-        }
-
-        if (
-          room.status !==
-          "playing"
-        ) {
-          return
-        }
-
-        if (
-          room.phase !==
-          "drawing"
-        ) {
-          return
-        }
-
-        if (
-          room.artistId ===
-          socket.id
-        ) {
-          return
-        }
-
-        if (
-          !room.currentWord
-        ) {
-          return
-        }
-
-        if (
-          room.correctGuessers.includes(
-            socket.id
-          )
-        ) {
-          return
-        }
-
-        if (
-          typeof guess !==
-          "string"
-        ) {
-          return
-        }
-
-        const cleanGuess =
-          guess
-            .trim()
-            .toUpperCase()
-
-        if (!cleanGuess) {
-          return
-        }
-
-        const correctWord =
-          room.currentWord
-            .trim()
-            .toUpperCase()
-
-        const player =
-          room.players.find(
-            (item) =>
-              item.id ===
-              socket.id
-          )
-
-        if (!player) {
-          return
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Correct
-        |--------------------------------------------------------------------------
-        */
-
-        if (
-          cleanGuess ===
-          correctWord
-        ) {
-          room.correctGuessers.push(
-            socket.id
-          )
-
-          const timeLeft =
-            Math.max(
-              0,
-              room.roundEndsAt -
-                Date.now()
-            )
-
-          const maxTime =
-            room.drawingTime *
-            1000
-
-          const score =
-            Math.max(
-              100,
-              Math.round(
-                500 +
-                  (timeLeft /
-                    maxTime) *
-                    500
-              )
-            )
-
+        if (artistPlayer) {
           if (
-            typeof player.score !==
+            typeof artistPlayer.score !==
             "number"
           ) {
-            player.score = 0
+            artistPlayer.score = 0
           }
 
-          player.score +=
-            score
-
-          socket.emit(
-            "correctGuess",
-            {
-              score,
-            }
-          )
-
-          io.to(
-            room.code
-          ).emit(
-            "playerGuessedCorrectly",
-            {
-              playerId:
-                player.id,
-
-              playerName:
-                player.name,
-            }
-          )
-
-          broadcastPlayers(
-            room
-          )
-
-          /*
-          | Check whether everyone has guessed.
-          */
-
-          const guessers =
-            room.players.filter(
-              (item) =>
-                item.id !==
-                room.artistId
-            )
-
-          const allGuessed =
-            guessers.length >
-              0 &&
-            guessers.every(
-              (item) =>
-                room.correctGuessers.includes(
-                  item.id
-                )
-            )
-
-          if (
-            allGuessed
-          ) {
-            clearRoomTimer(
-              room.code
-            )
-
-            nextRound(
-              room
-            )
-          }
-
-          return
+          artistPlayer.score += 100
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Wrong Guess
-        |--------------------------------------------------------------------------
-        */
+        socket.emit(
+          "correctGuess",
+          {
+            score,
+          }
+        )
 
-        io.to(
-          room.code
-        ).emit(
-          "playerGuess",
+        io.to(room.code).emit(
+          "playerGuessedCorrectly",
           {
             playerId:
               player.id,
-
             playerName:
               player.name,
-
-            guess:
-              guess.trim(),
-
-            correct:
-              false,
           }
         )
+
+        broadcastPlayers(room)
+
+        if (haveAllGuessersGuessed(room)) {
+          clearRoomTimer(
+            room.code
+          )
+
+          nextRound(room)
+        }
+
+        return
       }
-    )
 
-    /*
-    |--------------------------------------------------------------------------
-    | Leave Room
-    |--------------------------------------------------------------------------
-    */
+      io.to(room.code).emit(
+        "playerGuess",
+        {
+          playerId:
+            player.id,
+          playerName:
+            player.name,
+          guess:
+            guess.trim(),
+          correct: false,
+        }
+      )
+    }
+  )
 
-    socket.on(
-      "leaveRoom",
-      () => {
-        leaveRoom(
-          socket
-        )
-      }
-    )
+  socket.on(
+    "leaveRoom",
+    () => {
+      leaveRoom(socket)
+    }
+  )
 
-    /*
-    |--------------------------------------------------------------------------
-    | Disconnect
-    |--------------------------------------------------------------------------
-    */
+  socket.on(
+    "disconnect",
+    () => {
+      console.log(
+        "User disconnected:",
+        socket.id
+      )
 
-    socket.on(
-      "disconnect",
-      () => {
-        console.log(
-          "User disconnected:",
-          socket.id
-        )
-
-        leaveRoom(
-          socket
-        )
-      }
-    )
-  }
-)
-
-/*
-|--------------------------------------------------------------------------
-| Leave Room
-|--------------------------------------------------------------------------
-*/
+      leaveRoom(socket)
+    }
+  )
+})
 
 function leaveRoom(socket) {
-  if (
-    !socket.roomCode
-  ) {
+  if (!socket.roomCode) {
     return
   }
 
-  const room =
-    getRoomByCode(
-      socket.roomCode
-    )
+  const room = getRoomByCode(
+    socket.roomCode
+  )
 
   if (!room) {
     return
@@ -1554,20 +1177,15 @@ function leaveRoom(socket) {
   const playerIndex =
     room.players.findIndex(
       (player) =>
-        player.id ===
-        socket.id
+        player.id === socket.id
     )
 
-  if (
-    playerIndex === -1
-  ) {
+  if (playerIndex === -1) {
     return
   }
 
   const leavingPlayer =
-    room.players[
-      playerIndex
-    ]
+    room.players[playerIndex]
 
   const wasArtist =
     room.artistId ===
@@ -1578,12 +1196,6 @@ function leaveRoom(socket) {
     1
   )
 
-  /*
-  |--------------------------------------------------------------------------
-  | Give host to next player
-  |--------------------------------------------------------------------------
-  */
-
   if (
     leavingPlayer.isHost &&
     room.players.length > 0
@@ -1593,43 +1205,37 @@ function leaveRoom(socket) {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Artist left during game
-  |--------------------------------------------------------------------------
-  */
-
+   * [FIX] จัดการเกมที่กำลังเล่นอยู่หลังมีคนออก
+   */
   if (
-    wasArtist &&
-    room.status ===
-      "playing"
+    room.status === "playing" &&
+    room.players.length > 0
   ) {
-    room.artistId =
-      null
-
-    clearRoomTimer(
-      room.code
-    )
-
-    /*
-    | If enough players remain,
-    | restart the current round with another artist.
-    */
-
     if (
-      room.players.length >=
-      2
+      room.players.length <
+      MIN_PLAYERS_TO_CONTINUE
     ) {
+      // เหลือผู้เล่นน้อยเกินไป → จบเกม แล้วทุกคนจะถูกพาไปหน้าสรุปคะแนน
+      finishGame(room)
+    } else if (wasArtist) {
+      // artist ออก → ข้ามไป turn ถัดไปทันที
+      room.artistId = null
+
+      clearRoomTimer(room.code)
+
       startRound(room)
+    } else if (
+      room.phase === "drawing" &&
+      haveAllGuessersGuessed(room)
+    ) {
+      // คนทายที่เหลือทายถูกครบแล้ว → ไป turn ถัดไป
+      nextRound(room)
     }
   }
 
-  broadcastPlayers(
-    room
-  )
+  broadcastPlayers(room)
 
-  io.to(
-    room.code
-  ).emit(
+  io.to(room.code).emit(
     "playerLeft",
     {
       playerId:
@@ -1641,15 +1247,8 @@ function leaveRoom(socket) {
     `${leavingPlayer.name} left room ${room.code}`
   )
 
-  /*
-  |--------------------------------------------------------------------------
-  | Delete empty room
-  |--------------------------------------------------------------------------
-  */
-
   if (
-    room.players.length ===
-    0
+    room.players.length === 0
   ) {
     clearRoomTimer(
       room.code
@@ -1658,13 +1257,10 @@ function leaveRoom(socket) {
     const roomIndex =
       rooms.findIndex(
         (item) =>
-          item.code ===
-          room.code
+          item.code === room.code
       )
 
-    if (
-      roomIndex !== -1
-    ) {
+    if (roomIndex !== -1) {
       rooms.splice(
         roomIndex,
         1
@@ -1676,9 +1272,32 @@ function leaveRoom(socket) {
     )
   }
 
-  socket.roomCode =
-    null
+  socket.roomCode = null
 }
+
+/*
+ * [FIX] ลบห้องที่สร้างผ่าน REST แล้วไม่มีใครเข้า socket เลย
+ */
+setInterval(() => {
+  const now = Date.now()
+
+  for (let i = rooms.length - 1; i >= 0; i--) {
+    const room = rooms[i]
+
+    if (
+      room.players.length === 0 &&
+      now - room.createdAt > EMPTY_ROOM_TTL
+    ) {
+      clearRoomTimer(room.code)
+
+      rooms.splice(i, 1)
+
+      console.log(
+        `Room ${room.code} removed (empty)`
+      )
+    }
+  }
+}, ROOM_CLEANUP_INTERVAL)
 
 server.listen(
   PORT,

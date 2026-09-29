@@ -1,12 +1,23 @@
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
 
 function Lobby() {
+  const navigate = useNavigate()
+
   const isLoggedIn = localStorage.getItem("isLoggedIn") === "true"
 
   const [fur, setFur] = useState("Ginger Orange")
   const [ears, setEars] = useState("Classic")
   const [costume, setCostume] = useState("Beret")
+
+  // Join with Room Code
+  const [roomCode, setRoomCode] = useState("")
+  const [joinError, setJoinError] = useState("")
+  const [isJoining, setIsJoining] = useState(false)
+
+  // [FIX] Quick Match
+  const [matchError, setMatchError] = useState("")
+  const [isMatching, setIsMatching] = useState(false)
 
   const [guestName] = useState(() => {
     const savedName = localStorage.getItem("guestArtistName")
@@ -41,6 +52,105 @@ function Lobby() {
 
     return newName
   })
+
+  // บันทึกชื่อและตัวละครไว้ให้ RoomWaiting อ่านตอน joinRoom
+  useEffect(() => {
+    localStorage.setItem(
+      "playerName",
+      isLoggedIn ? "Artist Name" : guestName
+    )
+
+    localStorage.setItem(
+      "playerAppearance",
+      JSON.stringify({ fur, ears, costume })
+    )
+  }, [isLoggedIn, guestName, fur, ears, costume])
+
+  // [FIX] Quick Match: server จะหาห้องที่รออยู่ให้ ถ้าไม่มีจะสร้างใหม่
+  const handleQuickMatch = async () => {
+    setIsMatching(true)
+    setMatchError("")
+
+    try {
+      const response = await fetch(
+        "http://localhost:3000/api/rooms/quick-match",
+        {
+          method: "POST",
+        }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || "Quick Match failed")
+      }
+
+      navigate("/room/waiting", {
+        state: {
+          room: data.room,
+        },
+      })
+    } catch (error) {
+      console.error(error)
+
+      setMatchError(
+        error.message || "Cannot connect to server"
+      )
+    } finally {
+      setIsMatching(false)
+    }
+  }
+
+  // เช็กห้องจากรหัส แล้วพาไปหน้า Waiting
+  const handleJoinByCode = async (event) => {
+    event.preventDefault()
+
+    const code = roomCode.trim().toUpperCase()
+
+    if (code.length !== 4) {
+      setJoinError("Please enter a 4-character room code")
+      return
+    }
+
+    setIsJoining(true)
+    setJoinError("")
+
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/rooms/${encodeURIComponent(code)}`
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || "Room not found")
+      }
+
+      const foundRoom = data.room
+
+      if (foundRoom.status !== "waiting") {
+        throw new Error("Game has already started")
+      }
+
+      if (foundRoom.players.length >= foundRoom.maxPlayers) {
+        throw new Error("Room is full")
+      }
+
+      navigate("/room/waiting", {
+        state: {
+          room: foundRoom,
+        },
+      })
+    } catch (error) {
+      console.error(error)
+
+      setJoinError(
+        error.message || "Cannot connect to server"
+      )
+    } finally {
+      setIsJoining(false)
+    }
+  }
 
   const furOptions = [
     { name: "Ginger Orange", color: "#e06a3b" },
@@ -326,12 +436,21 @@ function Lobby() {
 
         {/* Right */}
         <section className="flex flex-col gap-[14px]">
+          {/* [FIX] Quick Match */}
           <button
             type="button"
-            className="h-12 w-full cursor-pointer rounded-[24px] border-2 border-black bg-[#d6f679] text-[17px] font-bold"
+            onClick={handleQuickMatch}
+            disabled={isMatching}
+            className="h-12 w-full cursor-pointer rounded-[24px] border-2 border-black bg-[#d6f679] text-[17px] font-bold disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Quick Match
+            {isMatching ? "Finding a room..." : "Quick Match"}
           </button>
+
+          {matchError && (
+            <p className="-mt-2 text-xs font-bold text-red-600">
+              {matchError}
+            </p>
+          )}
 
           <Link
             to="/room/create"
@@ -340,8 +459,11 @@ function Lobby() {
             Create Room
           </Link>
 
-          {/* Join Room */}
-          <div className="flex flex-col gap-3 rounded-[18px] border-2 border-black px-[18px] py-[14px]">
+          {/* Join Room — ใช้ form เพื่อให้กด Enter ได้ */}
+          <form
+            onSubmit={handleJoinByCode}
+            className="flex flex-col gap-3 rounded-[18px] border-2 border-black px-[18px] py-[14px]"
+          >
             <div className="flex justify-between text-xs font-bold">
               <span>🔑 Join with Room Code</span>
 
@@ -353,19 +475,35 @@ function Lobby() {
             <div className="flex items-center justify-between rounded-[24px] bg-[#e9e9e9] px-[14px] py-1.5">
               <input
                 type="text"
-                maxLength="4"
+                maxLength={4}
+                value={roomCode}
+                onChange={(event) => {
+                  setRoomCode(
+                    event.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, "")
+                  )
+                  setJoinError("")
+                }}
                 placeholder="ABCD"
                 className="min-w-0 flex-1 bg-transparent px-2 text-center text-sm font-bold uppercase tracking-[4px] outline-none placeholder:tracking-normal placeholder:text-gray-400"
               />
 
               <button
-                type="button"
-                className="shrink-0 cursor-pointer rounded-[14px] border-[1.5px] border-black bg-white px-[14px] py-1 text-xs font-bold"
+                type="submit"
+                disabled={isJoining}
+                className="shrink-0 cursor-pointer rounded-[14px] border-[1.5px] border-black bg-white px-[14px] py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Join →
+                {isJoining ? "Joining..." : "Join →"}
               </button>
             </div>
-          </div>
+
+            {joinError && (
+              <p className="text-xs font-bold text-red-600">
+                {joinError}
+              </p>
+            )}
+          </form>
         </section>
       </main>
 

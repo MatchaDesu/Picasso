@@ -1,20 +1,20 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 function RoomSettings() {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
 
-  const [roomName, setRoomName] = useState("")
-  const [drawingTime, setDrawingTime] = useState(60)
-  const [rounds, setRounds] = useState(5)
-  const [category, setCategory] = useState("Animals")
+  const [roomName, setRoomName] = useState("");
+  const [drawingTime, setDrawingTime] = useState(60);
+  const [rounds, setRounds] = useState(2);
+  const [category, setCategory] = useState("Animals");
 
-  const [isCreating, setIsCreating] = useState(false)
-  const [error, setError] = useState("")
+  const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState("");
 
-  const timeOptions = [30, 60, 90, 120]
+  const timeOptions = [30, 60, 90, 120];
 
-  const roundOptions = [3, 5, 10, 15]
+  const roundOptions = [1, 2, 3, 5];
 
   const categories = [
     {
@@ -37,69 +37,59 @@ function RoomSettings() {
       name: "Random",
       icon: "🎨",
     },
-  ]
+  ];
 
   const handleCreateRoom = async () => {
     if (!roomName.trim()) {
-      setError("Please enter a room name")
-      return
+      setError("Please enter a room name");
+      return;
     }
 
-    setIsCreating(true)
-    setError("")
+    setIsCreating(true);
+    setError("");
 
     try {
-      const response = await fetch(
-        "http://localhost:3000/api/rooms",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            roomName: roomName.trim(),
-            drawingTime,
-            rounds,
-            category,
-            maxPlayers: 8,
-          }),
-        }
-      )
+      const response = await fetch("http://localhost:3000/api/rooms", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          roomName: roomName.trim(),
+          drawingTime,
+          rounds,
+          category,
+          maxPlayers: 8,
+        }),
+      });
 
-      const data = await response.json()
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.message || "Failed to create room"
-        )
+        throw new Error(data.message || "Failed to create room");
       }
 
-      console.log("Room created:", data.room)
+      console.log("Room created:", data.room);
 
       navigate("/room/waiting", {
         state: {
           room: data.room,
         },
-      })
+      });
     } catch (error) {
-      console.error(error)
+      console.error(error);
 
-      setError(
-        error.message ||
-          "Cannot connect to server"
-      )
+      setError(error.message || "Cannot connect to server");
     } finally {
-      setIsCreating(false)
+      setIsCreating(false);
     }
-  }
+  };
 
   return (
     <div className="flex min-h-[calc(100vh-73px)] flex-col bg-[#f4f5f5]">
       <main className="mx-auto w-full max-w-[1000px] flex-1 px-10 py-10">
         <div className="mb-8">
-          <h1 className="text-[32px] font-extrabold">
-            Create Room
-          </h1>
+          <h1 className="text-[32px] font-extrabold">Create Room</h1>
 
           <p className="mt-2 text-sm text-[#666]">
             Set up your room before starting the game.
@@ -117,9 +107,7 @@ function RoomSettings() {
             <input
               type="text"
               value={roomName}
-              onChange={(event) =>
-                setRoomName(event.target.value)
-              }
+              onChange={(event) => setRoomName(event.target.value)}
               placeholder="Enter room name..."
               maxLength={30}
               className="h-12 w-full rounded-full border-[3px] border-[#222] px-5 text-sm outline-none"
@@ -129,22 +117,17 @@ function RoomSettings() {
           {/* Drawing Time */}
 
           <div className="mb-6">
-            <div className="mb-3 text-sm font-extrabold">
-              Drawing Time
-            </div>
+            <div className="mb-3 text-sm font-extrabold">Drawing Time</div>
 
             <div className="flex flex-wrap gap-2">
               {timeOptions.map((time) => {
-                const isSelected =
-                  drawingTime === time
+                const isSelected = drawingTime === time;
 
                 return (
                   <button
                     key={time}
                     type="button"
-                    onClick={() =>
-                      setDrawingTime(time)
-                    }
+                    onClick={() => setDrawingTime(time)}
                     className={`rounded-full border-4 px-5 py-2 text-sm font-bold ${
                       isSelected
                         ? "border-[#222] bg-[#d3d3d3]"
@@ -153,7 +136,7 @@ function RoomSettings() {
                   >
                     {time}s
                   </button>
-                )
+                );
               })}
             </div>
           </div>
@@ -161,22 +144,17 @@ function RoomSettings() {
           {/* Rounds */}
 
           <div className="mb-6">
-            <div className="mb-3 text-sm font-extrabold">
-              Rounds
-            </div>
+            <div className="mb-3 text-sm font-extrabold">Rounds</div>
 
             <div className="flex flex-wrap gap-2">
               {roundOptions.map((round) => {
-                const isSelected =
-                  rounds === round
+                const isSelected = rounds === round;
 
                 return (
                   <button
                     key={round}
                     type="button"
-                    onClick={() =>
-                      setRounds(round)
-                    }
+                    onClick={() => setRounds(round)}
                     className={`rounded-full border-4 px-5 py-2 text-sm font-bold ${
                       isSelected
                         ? "border-[#222] bg-[#d3d3d3]"
@@ -185,7 +163,7 @@ function RoomSettings() {
                   >
                     {round}
                   </button>
-                )
+                );
               })}
             </div>
           </div>
@@ -193,22 +171,17 @@ function RoomSettings() {
           {/* Category */}
 
           <div className="mb-8">
-            <div className="mb-3 text-sm font-extrabold">
-              Category
-            </div>
+            <div className="mb-3 text-sm font-extrabold">Category</div>
 
             <div className="flex flex-wrap gap-2">
               {categories.map((item) => {
-                const isSelected =
-                  category === item.name
+                const isSelected = category === item.name;
 
                 return (
                   <button
                     key={item.name}
                     type="button"
-                    onClick={() =>
-                      setCategory(item.name)
-                    }
+                    onClick={() => setCategory(item.name)}
                     className={`rounded-full border-4 px-4 py-2.5 text-sm font-bold ${
                       isSelected
                         ? "border-[#222] bg-[#d3d3d3]"
@@ -217,7 +190,7 @@ function RoomSettings() {
                   >
                     {item.icon} {item.name}
                   </button>
-                )
+                );
               })}
             </div>
           </div>
@@ -238,14 +211,12 @@ function RoomSettings() {
             disabled={isCreating}
             className="w-full rounded-full border-[3px] border-[#222] bg-[#e0f878] px-6 py-3 text-lg font-extrabold hover:bg-[#d0e868] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isCreating
-              ? "Creating Room..."
-              : "Create Room"}
+            {isCreating ? "Creating Room..." : "Create Room"}
           </button>
         </div>
       </main>
     </div>
-  )
+  );
 }
 
-export default RoomSettings
+export default RoomSettings;

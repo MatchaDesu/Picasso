@@ -28,12 +28,23 @@ function ScoreSummary() {
   | Match Duration
   |--------------------------------------------------------------------------
   |
-  | ตอนนี้ backend ยังไม่ได้เก็บเวลาเริ่มเกมจริงไว้สำหรับทั้ง match
-  | ดังนั้นแสดง --m --s ไปก่อน
+  | [FIX] ใช้ matchDurationMs ที่ server ส่งมาใน room
   |
   */
 
-  const matchDuration = "--m --s"
+  const matchDuration = useMemo(() => {
+    const ms = room?.matchDurationMs
+
+    if (typeof ms !== "number" || ms <= 0) {
+      return "--m --s"
+    }
+
+    const totalSeconds = Math.round(ms / 1000)
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+
+    return `${minutes}m ${seconds}s`
+  }, [room])
 
   /*
   |--------------------------------------------------------------------------
