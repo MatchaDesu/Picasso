@@ -1,29 +1,31 @@
-import { useEffect, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
 function Lobby() {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
 
-  const isLoggedIn = localStorage.getItem("isLoggedIn") === "true"
+  const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
 
-  const [fur, setFur] = useState("Ginger Orange")
-  const [ears, setEars] = useState("Classic")
-  const [costume, setCostume] = useState("Beret")
+  const isLoggedIn = localStorage.getItem("isLoggedIn") === "true";
+
+  const [fur, setFur] = useState("Ginger Orange");
+  const [ears, setEars] = useState("Classic");
+  const [costume, setCostume] = useState("Beret");
 
   // Join with Room Code
-  const [roomCode, setRoomCode] = useState("")
-  const [joinError, setJoinError] = useState("")
-  const [isJoining, setIsJoining] = useState(false)
+  const [roomCode, setRoomCode] = useState("");
+  const [joinError, setJoinError] = useState("");
+  const [isJoining, setIsJoining] = useState(false);
 
-  // [FIX] Quick Match
-  const [matchError, setMatchError] = useState("")
-  const [isMatching, setIsMatching] = useState(false)
+  // Quick Match
+  const [matchError, setMatchError] = useState("");
+  const [isMatching, setIsMatching] = useState(false);
 
   const [guestName] = useState(() => {
-    const savedName = localStorage.getItem("guestArtistName")
+    const savedName = localStorage.getItem("guestArtistName");
 
     if (savedName) {
-      return savedName
+      return savedName;
     }
 
     const names = [
@@ -39,154 +41,168 @@ function Lobby() {
       "PurrArtist",
       "TinyPaws",
       "GingerPaws",
-    ]
+    ];
 
-    const randomName =
-      names[Math.floor(Math.random() * names.length)]
+    const randomName = names[Math.floor(Math.random() * names.length)];
 
-    const randomNumber = Math.floor(100 + Math.random() * 900)
+    const randomNumber = Math.floor(100 + Math.random() * 900);
 
-    const newName = `${randomName}${randomNumber}`
+    const newName = `${randomName}${randomNumber}`;
 
-    localStorage.setItem("guestArtistName", newName)
+    localStorage.setItem("guestArtistName", newName);
 
-    return newName
-  })
+    return newName;
+  });
 
   // บันทึกชื่อและตัวละครไว้ให้ RoomWaiting อ่านตอน joinRoom
   useEffect(() => {
-    localStorage.setItem(
-      "playerName",
-      isLoggedIn ? "Artist Name" : guestName
-    )
+    localStorage.setItem("playerName", isLoggedIn ? "Artist Name" : guestName);
 
     localStorage.setItem(
       "playerAppearance",
-      JSON.stringify({ fur, ears, costume })
-    )
-  }, [isLoggedIn, guestName, fur, ears, costume])
+      JSON.stringify({
+        fur,
+        ears,
+        costume,
+      }),
+    );
+  }, [isLoggedIn, guestName, fur, ears, costume]);
 
-  // [FIX] Quick Match: server จะหาห้องที่รออยู่ให้ ถ้าไม่มีจะสร้างใหม่
+  // Quick Match
+  // server จะหาห้องที่รออยู่ให้ ถ้าไม่มีจะสร้างใหม่
   const handleQuickMatch = async () => {
-    setIsMatching(true)
-    setMatchError("")
+    setIsMatching(true);
+    setMatchError("");
 
     try {
-      const response = await fetch(
-        "http://localhost:3000/api/rooms/quick-match",
-        {
-          method: "POST",
-        }
-      )
+      const response = await fetch(`${SERVER_URL}/api/rooms/quick-match`, {
+        method: "POST",
+      });
 
-      const data = await response.json()
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.message || "Quick Match failed")
+        throw new Error(data.message || "Quick Match failed");
       }
 
       navigate("/room/waiting", {
         state: {
           room: data.room,
         },
-      })
+      });
     } catch (error) {
-      console.error(error)
+      console.error(error);
 
-      setMatchError(
-        error.message || "Cannot connect to server"
-      )
+      setMatchError(error.message || "Cannot connect to server");
     } finally {
-      setIsMatching(false)
+      setIsMatching(false);
     }
-  }
+  };
 
   // เช็กห้องจากรหัส แล้วพาไปหน้า Waiting
   const handleJoinByCode = async (event) => {
-    event.preventDefault()
+    event.preventDefault();
 
-    const code = roomCode.trim().toUpperCase()
+    const code = roomCode.trim().toUpperCase();
 
     if (code.length !== 4) {
-      setJoinError("Please enter a 4-character room code")
-      return
+      setJoinError("Please enter a 4-character room code");
+      return;
     }
 
-    setIsJoining(true)
-    setJoinError("")
+    setIsJoining(true);
+    setJoinError("");
 
     try {
       const response = await fetch(
-        `http://localhost:3000/api/rooms/${encodeURIComponent(code)}`
-      )
+        `${SERVER_URL}/api/rooms/${encodeURIComponent(code)}`,
+      );
 
-      const data = await response.json()
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.message || "Room not found")
+        throw new Error(data.message || "Room not found");
       }
 
-      const foundRoom = data.room
+      const foundRoom = data.room;
 
       if (foundRoom.status !== "waiting") {
-        throw new Error("Game has already started")
+        throw new Error("Game has already started");
       }
 
       if (foundRoom.players.length >= foundRoom.maxPlayers) {
-        throw new Error("Room is full")
+        throw new Error("Room is full");
       }
 
       navigate("/room/waiting", {
         state: {
           room: foundRoom,
         },
-      })
+      });
     } catch (error) {
-      console.error(error)
+      console.error(error);
 
-      setJoinError(
-        error.message || "Cannot connect to server"
-      )
+      setJoinError(error.message || "Cannot connect to server");
     } finally {
-      setIsJoining(false)
+      setIsJoining(false);
     }
-  }
+  };
 
   const furOptions = [
-    { name: "Ginger Orange", color: "#e06a3b" },
-    { name: "Brown", color: "#6d4c41" },
-    { name: "Black", color: "#212121" },
-    { name: "White", color: "#ffffff" },
-    { name: "Green", color: "#00695c" },
-  ]
+    {
+      name: "Ginger Orange",
+      color: "#e06a3b",
+    },
+    {
+      name: "Brown",
+      color: "#6d4c41",
+    },
+    {
+      name: "Black",
+      color: "#212121",
+    },
+    {
+      name: "White",
+      color: "#ffffff",
+    },
+    {
+      name: "Green",
+      color: "#00695c",
+    },
+  ];
 
-  const earOptions = [
-    "Classic",
-    "Scottish Fold",
-    "Fluffy Tuft",
-  ]
+  const earOptions = ["Classic", "Scottish Fold", "Fluffy Tuft"];
 
   const costumeOptions = [
-    { name: "Beret", icon: "🎨" },
-    { name: "Bowtie", icon: "🎀" },
-    { name: "Glasses", icon: "👓" },
-    { name: "Scarf", icon: "🧣" },
-  ]
+    {
+      name: "Beret",
+      icon: "🎨",
+    },
+    {
+      name: "Bowtie",
+      icon: "🎀",
+    },
+    {
+      name: "Glasses",
+      icon: "👓",
+    },
+    {
+      name: "Scarf",
+      icon: "🧣",
+    },
+  ];
 
   const selectedFur =
-    furOptions.find((option) => option.name === fur) || furOptions[0]
+    furOptions.find((option) => option.name === fur) || furOptions[0];
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-73px)] w-full max-w-[1080px] flex-1 flex-col gap-6 px-6 py-8">
       <main className="grid grid-cols-[minmax(0,1fr)_380px] items-start gap-9">
-
         {/* Character */}
         <section className="flex flex-col gap-5">
           <div className="flex items-start gap-6">
-
             {/* Character Preview */}
             <div className="relative flex h-[170px] w-[170px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#e5e5e5]">
-
               {/* Tail */}
               <div
                 className="absolute bottom-[25px] right-[18px] h-[50px] w-[22px] rounded-full border-[5px] border-black"
@@ -203,7 +219,6 @@ function Lobby() {
                   backgroundColor: selectedFur.color,
                 }}
               >
-
                 {/* Classic Ears */}
                 {ears === "Classic" && (
                   <>
@@ -211,8 +226,7 @@ function Lobby() {
                       className="absolute -left-[8px] -top-[25px] h-[48px] w-[45px]"
                       style={{
                         backgroundColor: selectedFur.color,
-                        clipPath:
-                          "polygon(0 100%, 25% 0, 100% 100%)",
+                        clipPath: "polygon(0 100%, 25% 0, 100% 100%)",
                       }}
                     />
 
@@ -220,8 +234,7 @@ function Lobby() {
                       className="absolute -right-[8px] -top-[25px] h-[48px] w-[45px]"
                       style={{
                         backgroundColor: selectedFur.color,
-                        clipPath:
-                          "polygon(0 100%, 75% 0, 100% 100%)",
+                        clipPath: "polygon(0 100%, 75% 0, 100% 100%)",
                       }}
                     />
                   </>
@@ -234,8 +247,7 @@ function Lobby() {
                       className="absolute -left-[7px] -top-[12px] h-[42px] w-[42px]"
                       style={{
                         backgroundColor: selectedFur.color,
-                        clipPath:
-                          "polygon(0 0, 100% 35%, 35% 100%)",
+                        clipPath: "polygon(0 0, 100% 35%, 35% 100%)",
                       }}
                     />
 
@@ -243,8 +255,7 @@ function Lobby() {
                       className="absolute -right-[7px] -top-[12px] h-[42px] w-[42px]"
                       style={{
                         backgroundColor: selectedFur.color,
-                        clipPath:
-                          "polygon(0 35%, 100% 0, 65% 100%)",
+                        clipPath: "polygon(0 35%, 100% 0, 65% 100%)",
                       }}
                     />
                   </>
@@ -297,9 +308,7 @@ function Lobby() {
               {costume === "Bowtie" && (
                 <div className="absolute bottom-[25px] left-1/2 flex -translate-x-1/2 items-center">
                   <div className="h-[18px] w-[23px] rotate-[20deg] rounded-[6px] border-2 border-black bg-[#e85d75]" />
-
                   <div className="z-10 h-[10px] w-[10px] rounded-full border-2 border-black bg-[#f5c542]" />
-
                   <div className="h-[18px] w-[23px] rotate-[-20deg] rounded-[6px] border-2 border-black bg-[#e85d75]" />
                 </div>
               )}
@@ -308,9 +317,7 @@ function Lobby() {
               {costume === "Glasses" && (
                 <div className="absolute left-1/2 top-[62px] flex -translate-x-1/2 items-center gap-1">
                   <div className="h-[22px] w-[27px] rounded-full border-[3px] border-black" />
-
                   <div className="h-[3px] w-[8px] bg-black" />
-
                   <div className="h-[22px] w-[27px] rounded-full border-[3px] border-black" />
                 </div>
               )}
@@ -327,20 +334,16 @@ function Lobby() {
 
             {/* Customization */}
             <div className="flex flex-1 flex-col gap-[14px]">
-
               {/* Fur */}
               <div>
                 <div className="mb-1.5 flex items-center gap-2 text-xs font-bold">
                   Fur Pigment
-
-                  <small className="font-normal text-[#666]">
-                    {fur}
-                  </small>
+                  <small className="font-normal text-[#666]">{fur}</small>
                 </div>
 
                 <div className="flex gap-2">
                   {furOptions.map((option) => {
-                    const isSelected = fur === option.name
+                    const isSelected = fur === option.name;
 
                     return (
                       <button
@@ -349,15 +352,13 @@ function Lobby() {
                         onClick={() => setFur(option.name)}
                         aria-label={option.name}
                         className={`h-[22px] w-[22px] cursor-pointer rounded-full border-2 ${
-                          isSelected
-                            ? "border-black"
-                            : "border-transparent"
+                          isSelected ? "border-black" : "border-transparent"
                         }`}
                         style={{
                           backgroundColor: option.color,
                         }}
                       />
-                    )
+                    );
                   })}
                 </div>
               </div>
@@ -370,7 +371,7 @@ function Lobby() {
 
                 <div className="flex flex-wrap gap-1.5">
                   {earOptions.map((option) => {
-                    const isSelected = ears === option
+                    const isSelected = ears === option;
 
                     return (
                       <button
@@ -385,7 +386,7 @@ function Lobby() {
                       >
                         {option}
                       </button>
-                    )
+                    );
                   })}
                 </div>
               </div>
@@ -398,7 +399,7 @@ function Lobby() {
 
                 <div className="flex flex-wrap gap-1.5">
                   {costumeOptions.map((option) => {
-                    const isSelected = costume === option.name
+                    const isSelected = costume === option.name;
 
                     return (
                       <button
@@ -413,7 +414,7 @@ function Lobby() {
                       >
                         {option.icon} {option.name}
                       </button>
-                    )
+                    );
                   })}
                 </div>
               </div>
@@ -426,17 +427,13 @@ function Lobby() {
               {isLoggedIn ? "Artist Name" : guestName}
             </span>
 
-            {!isLoggedIn && (
-              <span className="text-xs text-[#777]">
-                Guest
-              </span>
-            )}
+            {!isLoggedIn && <span className="text-xs text-[#777]">Guest</span>}
           </div>
         </section>
 
         {/* Right */}
         <section className="flex flex-col gap-[14px]">
-          {/* [FIX] Quick Match */}
+          {/* Quick Match */}
           <button
             type="button"
             onClick={handleQuickMatch}
@@ -447,9 +444,7 @@ function Lobby() {
           </button>
 
           {matchError && (
-            <p className="-mt-2 text-xs font-bold text-red-600">
-              {matchError}
-            </p>
+            <p className="-mt-2 text-xs font-bold text-red-600">{matchError}</p>
           )}
 
           <Link
@@ -459,7 +454,7 @@ function Lobby() {
             Create Room
           </Link>
 
-          {/* Join Room — ใช้ form เพื่อให้กด Enter ได้ */}
+          {/* Join Room */}
           <form
             onSubmit={handleJoinByCode}
             className="flex flex-col gap-3 rounded-[18px] border-2 border-black px-[18px] py-[14px]"
@@ -479,11 +474,10 @@ function Lobby() {
                 value={roomCode}
                 onChange={(event) => {
                   setRoomCode(
-                    event.target.value
-                      .toUpperCase()
-                      .replace(/[^A-Z0-9]/g, "")
-                  )
-                  setJoinError("")
+                    event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+                  );
+
+                  setJoinError("");
                 }}
                 placeholder="ABCD"
                 className="min-w-0 flex-1 bg-transparent px-2 text-center text-sm font-bold uppercase tracking-[4px] outline-none placeholder:tracking-normal placeholder:text-gray-400"
@@ -499,9 +493,7 @@ function Lobby() {
             </div>
 
             {joinError && (
-              <p className="text-xs font-bold text-red-600">
-                {joinError}
-              </p>
+              <p className="text-xs font-bold text-red-600">{joinError}</p>
             )}
           </form>
         </section>
@@ -509,9 +501,7 @@ function Lobby() {
 
       {/* Leaderboard */}
       <section className="rounded-2xl border-2 border-black px-5 py-4">
-        <div className="mb-3 text-sm font-bold">
-          Community Leader Board.
-        </div>
+        <div className="mb-3 text-sm font-bold">Community Leader Board.</div>
 
         <div className="grid grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((player) => (
@@ -525,7 +515,7 @@ function Lobby() {
         </div>
       </section>
     </div>
-  )
+  );
 }
 
-export default Lobby
+export default Lobby;
