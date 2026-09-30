@@ -1,125 +1,145 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-function CharacterCustomizer() {
-  const [furColor, setFurColor] = useState("#e06a3b");
-  const [earStyle, setEarStyle] = useState("Classic");
-  const [costume, setCostume] = useState("🎨 Beret");
+const FUR_COLORS = [
+  {
+    name: "Ginger Orange",
+    value: "#e06a3b",
+  },
+  {
+    name: "Brown",
+    value: "#6d4c41",
+  },
+  {
+    name: "Black",
+    value: "#212121",
+  },
+  {
+    name: "White",
+    value: "#ffffff",
+  },
+  {
+    name: "Green",
+    value: "#00695c",
+  },
+];
 
-  const furColors = [
-    {
-      color: "#e06a3b",
-      name: "Ginger Orange",
-    },
-    {
-      color: "#6d4c41",
-      name: "Brown",
-    },
-    {
-      color: "#212121",
-      name: "Black",
-    },
-    {
-      color: "#ffffff",
-      name: "White",
-    },
-    {
-      color: "#00695c",
-      name: "Green",
-    },
-  ];
+const EAR_STYLES = ["Classic", "Scottish Fold", "Fluffy Tuft"];
 
-  const earStyles = ["Classic", "Scottish Fold", "Fluffy Tuft"];
+const COSTUMES = ["🎨 Beret", "🎀 Bowtie", "👓 Glasses", "🧣 Scarf"];
 
-  const costumes = ["🎨 Beret", "🎀 Bowtie", "👓 Glasses", "🧣 Scarf"];
+const DEFAULT_AVATAR = {
+  furColor: "#e06a3b",
+  earStyle: "Classic",
+  costume: "🎨 Beret",
+};
 
-  const selectedFur = furColors.find((item) => item.color === furColor);
+function CharacterCustomizer({ value, onChange }) {
+  const [avatar, setAvatar] = useState(value || DEFAULT_AVATAR);
+
+  useEffect(() => {
+    if (value) {
+      setAvatar(value);
+    }
+  }, [value]);
+
+  function updateAvatar(key, newValue) {
+    const updatedAvatar = {
+      ...avatar,
+      [key]: newValue,
+    };
+
+    setAvatar(updatedAvatar);
+
+    if (onChange) {
+      onChange(updatedAvatar);
+    }
+  }
 
   return (
-    <div className="flex gap-6">
-      {/* Avatar Preview */}
-      <div
-        className="flex h-[170px] w-[170px] shrink-0 items-center justify-center rounded-lg"
-        style={{
-          backgroundColor: furColor,
-        }}
-      >
-        <span className="text-7xl">🐱</span>
+    <div className="flex flex-col gap-4">
+      {/* Character Preview */}
+      <div className="flex justify-center">
+        <div
+          className="flex h-[170px] w-[170px] items-center justify-center rounded-full border-2 border-black text-7xl"
+          style={{
+            backgroundColor: avatar.furColor,
+          }}
+        >
+          🐱
+        </div>
       </div>
 
-      {/* Options */}
-      <div className="flex flex-1 flex-col gap-[14px]">
-        {/* Fur Pigment */}
-        <div>
-          <div className="mb-1.5 flex items-center gap-2 text-xs font-bold">
-            <span>Fur Pigment</span>
+      {/* Fur Pigment */}
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-bold">Fur Pigment</p>
 
-            <small className="font-normal text-[#666666]">
-              {selectedFur?.name}
-            </small>
-          </div>
+        <div className="flex items-center gap-3">
+          {FUR_COLORS.map((color) => {
+            const isSelected = avatar.furColor === color.value;
 
-          <div className="flex gap-2">
-            {furColors.map((item) => (
+            return (
               <button
-                key={item.color}
+                key={color.value}
                 type="button"
-                aria-label={item.name}
-                onClick={() => setFurColor(item.color)}
+                title={color.name}
+                onClick={() => updateAvatar("furColor", color.value)}
                 className={`h-[22px] w-[22px] rounded-full border-2 ${
-                  furColor === item.color
-                    ? "border-black"
-                    : "border-transparent"
+                  isSelected ? "border-black" : "border-[#ccc]"
                 }`}
                 style={{
-                  backgroundColor: item.color,
+                  backgroundColor: color.value,
                 }}
               />
-            ))}
-          </div>
+            );
+          })}
         </div>
+      </div>
 
-        {/* Ears & Expression */}
-        <div>
-          <div className="mb-1.5 text-xs font-bold">Ears & Expression</div>
+      {/* Ears & Expression */}
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-bold">Ears & Expression</p>
 
-          <div className="flex flex-wrap gap-1.5">
-            {earStyles.map((style) => (
+        <div className="flex flex-wrap gap-2">
+          {EAR_STYLES.map((ear) => {
+            const isSelected = avatar.earStyle === ear;
+
+            return (
               <button
-                key={style}
+                key={ear}
                 type="button"
-                onClick={() => setEarStyle(style)}
-                className={`rounded-[14px] px-3 py-[5px] text-[11px] ${
-                  earStyle === style
-                    ? "border-2 border-black font-bold"
-                    : "border border-[#cccccc] bg-white"
+                onClick={() => updateAvatar("earStyle", ear)}
+                className={`rounded-full border-2 px-4 py-2 text-xs font-bold transition ${
+                  isSelected ? "border-black" : "border-[#ccc]"
                 }`}
               >
-                {style}
+                {ear}
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
+      </div>
 
-        {/* Costume */}
-        <div>
-          <div className="mb-1.5 text-xs font-bold">Costume & Atelier Gear</div>
+      {/* Costume & Atelier Gear */}
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-bold">Costume & Atelier Gear</p>
 
-          <div className="flex flex-wrap gap-1.5">
-            {costumes.map((item) => (
+        <div className="flex flex-wrap gap-2">
+          {COSTUMES.map((costume) => {
+            const isSelected = avatar.costume === costume;
+
+            return (
               <button
-                key={item}
+                key={costume}
                 type="button"
-                onClick={() => setCostume(item)}
-                className={`rounded-[14px] px-3 py-[5px] text-[11px] ${
-                  costume === item
-                    ? "border-2 border-black font-bold"
-                    : "border border-[#cccccc] bg-white"
+                onClick={() => updateAvatar("costume", costume)}
+                className={`rounded-full border-2 px-4 py-2 text-xs font-bold transition ${
+                  isSelected ? "border-black" : "border-[#ccc]"
                 }`}
               >
-                {item}
+                {costume}
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
       </div>
     </div>
