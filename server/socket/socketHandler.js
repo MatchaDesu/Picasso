@@ -187,6 +187,94 @@ function emitPlayerProfile(
 |--------------------------------------------------------------------------
 */
 
+function finishGameAndCloseRoom(io, game) {
+    if (!game) {
+        return
+    }
+
+    const roomId = game.roomId
+
+    /*
+     * ป้องกัน game ถูกปิดไปแล้ว
+     */
+    if (gameManager.getGame(roomId) !== game) {
+        return
+    }
+
+    const room = roomManager.getRoom(roomId)
+
+    /*
+     * เก็บข้อมูลผู้เล่นไว้ก่อนลบ room
+     */
+    const players = room
+        ? Array.from(room.players.values())
+            .filter(
+                (player) =>
+                    !player.disconnected
+            )
+            .map(serializePlayer)
+        : []
+
+    const scores = {
+        ...game.scores,
+    }
+
+    /*
+     * หา socket ของผู้เล่นทั้งหมด
+     * ก่อนเอาออกจาก room
+     */
+    const roomSockets = io.sockets.adapter.rooms.get(roomId)
+
+    const sockets = roomSockets
+        ? Array.from(roomSockets)
+            .map(
+                (socketId) =>
+                    io.sockets.sockets.get(socketId)
+            )
+            .filter(Boolean)
+        : []
+
+    /*
+     * ส่งผลลัพธ์ให้ทุกคนก่อน
+     * ลบ room
+     */
+    io.to(roomId).emit(
+        "gameFinished",
+        {
+            players,
+            scores,
+        }
+    )
+
+    /*
+     * ลบ Game
+     */
+    gameManager.deleteGame(roomId)
+
+    /*
+     * ลบ Room
+     */
+    roomManager.deleteRoom(roomId)
+
+    /*
+     * เอาผู้เล่นทุกคนออกจาก Socket.IO room
+     */
+    for (const playerSocket of sockets) {
+        playerSocket.leave(roomId)
+
+        playerSocket.data.roomId = null
+    }
+
+    /*
+     * แจ้ง lobby ว่า room หายแล้ว
+     */
+    io.emit("roomListChanged")
+
+    console.log(
+        `Game finished and room ${roomId} was deleted.`
+    )
+}
+
 function emitGameState(
     io,
     game
@@ -291,14 +379,9 @@ function emitGameState(
         game.phase ===
         "game-result"
     ) {
-        io.to(
-            game.roomId
-        ).emit(
-            "gameFinished",
-            {
-                scores:
-                    game.scores,
-            }
+        finishGameAndCloseRoom(
+            io,
+            game
         )
     }
 }
@@ -624,7 +707,6 @@ function cleanupDisconnectedPlayer(
     /*
      * Player กลับมา reconnect แล้ว
      */
-
     if (
         !player.disconnected
     ) {
@@ -632,16 +714,50 @@ function cleanupDisconnectedPlayer(
     }
 
     /*
-     * ลบ player ออกจาก room
+     * หา Game
      */
+    const game =
+        gameManager.getGame(
+            roomId
+        )
 
+    let gameResult = null
+
+    /*
+     * เอาออกจาก Game ก่อน
+     */
+    if (game) {
+        gameResult =
+            gameManager.removePlayer(
+                roomId,
+                oldPlayerId
+            )
+    }
+
+    /*
+     * เอาออกจาก Room
+     *
+     * ต้องเกิดก่อน finishGameAndCloseRoom()
+     */
     const updatedRoom =
         roomManager.removePlayer(
             roomId,
             oldPlayerId
         )
 
+    /*
+     * ไม่มี Room แล้ว
+     */
     if (!updatedRoom) {
+        if (
+            gameResult &&
+            gameResult.game
+        ) {
+            gameManager.deleteGame(
+                roomId
+            )
+        }
+
         io.emit(
             "roomClosed",
             roomId
@@ -659,6 +775,32 @@ function cleanupDisconnectedPlayer(
                 oldPlayerId,
         }
     )
+
+    /*
+     * Game เหลือ 1 คน
+     */
+    if (
+        gameResult &&
+        gameResult.changed &&
+        gameResult.game
+    ) {
+        if (
+            gameResult.game.phase ===
+            "game-result"
+        ) {
+            finishGameAndCloseRoom(
+                io,
+                gameResult.game
+            )
+
+            return
+        }
+
+        emitGameState(
+            io,
+            gameResult.game
+        )
+    }
 
     emitRoomUpdate(
         io,
@@ -750,35 +892,30 @@ function leaveCurrentRoom(
         return
     }
 
+    /*
+     * หา Game ก่อน
+     */
     const game =
         gameManager.getGame(
             roomId
         )
 
-    if (game) {
-        const result =
-            gameManager.removePlayer(
-                roomId,
-                socket.id
-            )
-
-        if (
-            result.changed &&
-            result.game
-        ) {
-            emitGameState(
-                io,
-                result.game
-            )
-        }
-    }
-
-    const result =
+    /*
+     * เอา player ออกจาก Room ก่อน
+     *
+     * สำคัญ:
+     * เพราะ finishGameAndCloseRoom()
+     * จะอ่าน players จาก RoomManager
+     */
+    const roomResult =
         roomService.leaveRoom(
             roomId,
             socket.id
         )
 
+    /*
+     * เอา socket ออกจาก Socket.IO room
+     */
     socket.leave(
         roomId
     )
@@ -786,7 +923,56 @@ function leaveCurrentRoom(
     socket.data.roomId =
         null
 
-    if (!result.room) {
+    /*
+     * ถ้า Game กำลังเล่นอยู่
+     */
+    if (game) {
+        const gameResult =
+            gameManager.removePlayer(
+                roomId,
+                socket.id
+            )
+
+        /*
+         * เหลือ 1 คน
+         * หรือ Game จบแล้ว
+         */
+        if (
+            gameResult.changed &&
+            gameResult.game
+        ) {
+            /*
+             * Game จบ
+             */
+            if (
+                gameResult.game.phase ===
+                "game-result"
+            ) {
+                finishGameAndCloseRoom(
+                    io,
+                    gameResult.game
+                )
+
+                return
+            }
+
+            /*
+             * Game ยังเล่นต่อ
+             */
+            emitGameState(
+                io,
+                gameResult.game
+            )
+        }
+    }
+
+    /*
+     * Room ไม่มีคนเหลือ
+     */
+    if (
+        !roomResult ||
+        !roomResult.room
+    ) {
         io.emit(
             "roomClosed",
             roomId
@@ -795,6 +981,9 @@ function leaveCurrentRoom(
         return
     }
 
+    /*
+     * แจ้งคนที่เหลือ
+     */
     io.to(
         roomId
     ).emit(
@@ -807,7 +996,7 @@ function leaveCurrentRoom(
 
     emitRoomUpdate(
         io,
-        result.room
+        roomResult.room
     )
 }
 

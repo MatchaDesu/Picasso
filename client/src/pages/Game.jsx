@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
@@ -22,6 +23,24 @@ function Game() {
   const [guessedPlayers, setGuessedPlayers] = useState(new Set());
   const [timeLeft, setTimeLeft] = useState(0);
   const [connected, setConnected] = useState(socket.connected);
+
+  const roomRef = useRef(initialRoom);
+  const gameStateRef = useRef(null);
+  const resultNavigatedRef = useRef(false);
+
+  /*
+   * --------------------------------------------------
+   * Keep latest room / game state in refs
+   * --------------------------------------------------
+   */
+
+  useEffect(() => {
+    roomRef.current = room;
+  }, [room]);
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   /*
    * --------------------------------------------------
@@ -48,24 +67,14 @@ function Game() {
    */
 
   const currentSocketId = socket.id;
-
   const isDrawer = gameState?.drawerId === currentSocketId;
 
-  const guessablePlayers = gameState?.guessablePlayers || 0;
-
-  const guessedCount = gameState?.guessedCount || 0;
-
   const totalRounds = gameState?.totalRounds || 0;
-
   const currentRound = gameState?.round || 1;
 
   /*
    * --------------------------------------------------
    * Word hint
-   *
-   * IMPORTANT:
-   * อย่าใช้ "_ ".repeat(length)
-   * เพราะจะทำให้ fallback spacing แปลก
    * --------------------------------------------------
    */
 
@@ -143,7 +152,7 @@ function Game() {
     }
 
     /*
-     * Socket connected
+     * Connect
      */
 
     function handleConnect() {
@@ -152,7 +161,7 @@ function Game() {
     }
 
     /*
-     * Socket disconnected
+     * Disconnect
      */
 
     function handleDisconnect() {
@@ -165,6 +174,7 @@ function Game() {
 
     function handleGameStarted(data) {
       if (data?.room) {
+        roomRef.current = data.room;
         setRoom(data.room);
       }
 
@@ -182,19 +192,11 @@ function Game() {
 
       const nextGameState = state.game || state;
 
-      /*
-       * สำคัญ:
-       *
-       * gameState เปลี่ยนได้ตอน hint เปลี่ยน
-       * เป็นเรื่องปกติ
-       *
-       * แต่เราไม่ใส่ key ให้ DrawingBoard
-       * ดังนั้น DrawingBoard จะไม่ remount
-       */
-
+      gameStateRef.current = nextGameState;
       setGameState(nextGameState);
 
       if (state.room) {
+        roomRef.current = state.room;
         setRoom(state.room);
       }
 
@@ -203,6 +205,36 @@ function Game() {
       }
     }
 
+    /*
+     * --------------------------------------------------
+     * GAME FINISHED
+     *
+     * Server จะส่ง event นี้ตอนเกมจบ
+     *
+     * ไม่ emit leaveRoom ที่นี่
+     * เพราะ Server จะลบ room ให้เอง
+     * --------------------------------------------------
+     */
+
+    function handleGameFinished(data) {
+      if (resultNavigatedRef.current) {
+        return;
+      }
+
+      resultNavigatedRef.current = true;
+
+      const finalPlayers = Array.isArray(data?.players) ? data.players : [];
+
+      const finalScores = data?.scores || {};
+
+      navigate("/result", {
+        replace: true,
+        state: {
+          players: finalPlayers,
+          scores: finalScores,
+        },
+      });
+    }
     /*
      * Word options
      */
@@ -238,6 +270,7 @@ function Game() {
         return;
       }
 
+      roomRef.current = updatedRoom;
       setRoom(updatedRoom);
     }
 
@@ -256,9 +289,7 @@ function Game() {
         if (result.playerId) {
           setGuessedPlayers((previous) => {
             const next = new Set(previous);
-
             next.add(result.playerId);
-
             return next;
           });
         }
@@ -358,7 +389,7 @@ function Game() {
     }
 
     /*
-     * Register listeners
+     * Register
      */
 
     socket.on("connect", handleConnect);
@@ -368,6 +399,8 @@ function Game() {
     socket.on("gameStarted", handleGameStarted);
 
     socket.on("gameState", handleGameState);
+
+    socket.on("gameFinished", handleGameFinished);
 
     socket.on("wordOptions", handleWordOptions);
 
@@ -384,10 +417,6 @@ function Game() {
     socket.on("gameError", handleGameError);
 
     socket.on("playerDisconnected", handlePlayerDisconnected);
-
-    /*
-     * Socket connected ก่อนเข้า page
-     */
 
     if (socket.connected) {
       requestGameState();
@@ -406,6 +435,8 @@ function Game() {
 
       socket.off("gameState", handleGameState);
 
+      socket.off("gameFinished", handleGameFinished);
+
       socket.off("wordOptions", handleWordOptions);
 
       socket.off("drawerWord", handleDrawerWord);
@@ -422,17 +453,11 @@ function Game() {
 
       socket.off("playerDisconnected", handlePlayerDisconnected);
     };
-  }, []);
+  }, [navigate]);
 
   /*
    * --------------------------------------------------
-   * Reset UI when a NEW TURN starts
-   *
-   * IMPORTANT:
-   * ไม่ผูกกับ hint
-   *
-   * ดังนั้น hint เปลี่ยนแล้ว
-   * จะไม่ reset chat / guessed players / drawer word
+   * Reset UI when NEW TURN starts
    * --------------------------------------------------
    */
 
@@ -442,7 +467,6 @@ function Game() {
     }
 
     setGuessedPlayers(new Set());
-
     setGuessMessage("");
     setChatMessages([]);
     setDrawerWord("");
@@ -506,9 +530,7 @@ function Game() {
         ? isDrawer
           ? "YOU ARE DRAWING!"
           : "GUESS THE DRAWING!"
-        : gameState?.phase === "game-result"
-          ? "GAME RESULT"
-          : "MATCH STAGE";
+        : "MATCH STAGE";
 
   const wordText =
     isDrawer && drawerWord
@@ -582,12 +604,6 @@ function Game() {
       </div>
     );
   }
-
-  /*
-   * --------------------------------------------------
-   * Render
-   * --------------------------------------------------
-   */
 
   return (
     <div className="flex min-h-screen flex-col border-[3px] border-[#111111] bg-white font-sans text-[#1b1b1b]">
@@ -821,19 +837,6 @@ function Game() {
             </div>
 
             <div className="h-full w-full p-0">
-              {/*
-               * IMPORTANT:
-               *
-               * ห้ามใส่ key ที่เกี่ยวกับ
-               * gameState.hint
-               *
-               * เพราะ hint เปลี่ยนทุก 10 วินาที
-               * และจะทำให้ DrawingBoard remount
-               *
-               * ตอนนี้ DrawingBoard จะอยู่ component
-               * เดิมตลอดระหว่างรอบ
-               */}
-
               <DrawingBoard
                 disabled={!isDrawer || gameState.phase !== "draw-and-guess"}
               />
@@ -968,60 +971,6 @@ function Game() {
             <p className="mt-5 text-center text-xs text-[#666666]">
               Choose quickly before the timer runs out.
             </p>
-          </div>
-        </div>
-      )}
-
-      {/* GAME RESULT */}
-
-      {gameState.phase === "game-result" && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 px-6">
-          <div className="w-full max-w-[560px] rounded-[24px] border-[3px] border-[#111111] bg-white p-7 shadow-[0_8px_0_#111111]">
-            <p className="text-center text-sm font-semibold text-[#666666]">
-              MATCH COMPLETE
-            </p>
-
-            <h2 className="mt-1 text-center text-4xl font-bold">
-              🏆 Final Scores
-            </h2>
-
-            <div className="mt-6 flex flex-col gap-2">
-              {[...players]
-                .sort((a, b) => getPlayerScore(b) - getPlayerScore(a))
-                .map((player, index) => (
-                  <div
-                    key={player.id}
-                    className={`flex items-center gap-3 px-4 py-3 ${
-                      index === 0 ? "rounded-xl bg-[#e8f79c]" : "bg-[#ebebeb]"
-                    }`}
-                  >
-                    <span className="w-8 text-lg font-bold">#{index + 1}</span>
-
-                    <div
-                      className="grid h-10 w-10 place-items-center rounded-full text-lg"
-                      style={{
-                        backgroundColor: player.avatar?.furColor || "#d4d4d4",
-                      }}
-                    >
-                      🐱
-                    </div>
-
-                    <span className="flex-1 font-semibold">{player.name}</span>
-
-                    <span className="font-bold">
-                      {getPlayerScore(player).toLocaleString()} pts
-                    </span>
-                  </div>
-                ))}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => navigate("/")}
-              className="mt-6 w-full rounded-full border-[3px] border-[#111111] bg-[#d6f679] px-6 py-3 font-bold transition hover:opacity-80"
-            >
-              Back to Lobby
-            </button>
           </div>
         </div>
       )}

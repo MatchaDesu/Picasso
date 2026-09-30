@@ -827,6 +827,9 @@ class GameManager {
             }
         }
 
+        /*
+         * เอา player ออกจาก game
+         */
         game.playerIds.splice(
             index,
             1
@@ -841,7 +844,7 @@ class GameManager {
         )
 
         /*
-         * ไม่มี player เหลือ
+         * ไม่มีผู้เล่นเหลือ
          */
         if (
             game.playerIds.length ===
@@ -858,7 +861,50 @@ class GameManager {
         }
 
         /*
-         * Drawer ออก
+         * เหลือผู้เล่นเพียง 1 คน
+         *
+         * จบเกมทันที
+         *
+         * ไม่ให้เริ่ม choose-word รอบใหม่
+         */
+        if (
+            game.playerIds.length ===
+            1
+        ) {
+            this.clearTimers(
+                game
+            )
+
+            game.phase =
+                "game-result"
+
+            game.word = ""
+
+            game.wordOptions = []
+
+            game.phaseEndsAt = 0
+
+            game.hint = ""
+
+            game.revealedIndexes =
+                new Set()
+
+            game.hintRevealed =
+                false
+
+            game.strokes = []
+
+            game.totalRounds =
+                game.playerIds.length
+
+            return {
+                changed: true,
+                game,
+            }
+        }
+
+        /*
+         * ถ้า Drawer ออก
          */
         if (
             game.drawerId ===
@@ -882,9 +928,10 @@ class GameManager {
                 )
             }
         } else {
+
             /*
-             * ปรับ turnIndex ถ้า player
-             * ที่อยู่ก่อน drawer ถูกลบ
+             * ถ้า player ที่ออก
+             * อยู่ก่อน drawer
              */
             if (
                 index <
@@ -899,9 +946,6 @@ class GameManager {
                     game.turnIndex
                 )
 
-            /*
-             * ปรับ total rounds
-             */
             game.totalRounds =
                 game.playerIds.length
         }

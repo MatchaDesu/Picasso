@@ -1,7 +1,9 @@
 const MAX_PLAYERS = 8
+
 const MIN_PLAYERS = 3
 
 class RoomManager {
+
     constructor() {
         this.rooms = new Map()
     }
@@ -190,13 +192,9 @@ class RoomManager {
 
         const restoredPlayer = {
             ...oldPlayer,
-
             ...newPlayer,
-
             id: newPlayer.id,
-
             disconnected: false,
-
             disconnectedAt:
                 null,
         }
@@ -217,10 +215,8 @@ class RoomManager {
         return {
             success: true,
             room,
-
             player:
                 restoredPlayer,
-
             oldPlayerId,
         }
     }
