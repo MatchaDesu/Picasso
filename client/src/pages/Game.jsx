@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-
 import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
@@ -14,28 +13,19 @@ function Game() {
   const initialRoom = location.state?.room || null;
 
   const [room, setRoom] = useState(initialRoom);
-
   const [gameState, setGameState] = useState(null);
-
   const [wordOptions, setWordOptions] = useState([]);
-
   const [drawerWord, setDrawerWord] = useState("");
-
   const [guess, setGuess] = useState("");
-
   const [guessMessage, setGuessMessage] = useState("");
-
   const [chatMessages, setChatMessages] = useState([]);
-
   const [guessedPlayers, setGuessedPlayers] = useState(new Set());
-
   const [timeLeft, setTimeLeft] = useState(0);
-
   const [connected, setConnected] = useState(socket.connected);
 
   /*
    * --------------------------------------------------
-   * Helpers
+   * Players
    * --------------------------------------------------
    */
 
@@ -50,6 +40,12 @@ function Game() {
 
     return Object.values(room.players);
   }, [room]);
+
+  /*
+   * --------------------------------------------------
+   * Current player
+   * --------------------------------------------------
+   */
 
   const currentSocketId = socket.id;
 
@@ -66,12 +62,20 @@ function Game() {
   /*
    * --------------------------------------------------
    * Word hint
+   *
+   * IMPORTANT:
+   * อย่าใช้ "_ ".repeat(length)
+   * เพราะจะทำให้ fallback spacing แปลก
    * --------------------------------------------------
    */
 
   const wordHint = useMemo(() => {
     if (isDrawer) {
       return drawerWord || "";
+    }
+
+    if (gameState?.hint) {
+      return gameState.hint;
     }
 
     if (gameState?.wordHint) {
@@ -84,8 +88,14 @@ function Game() {
       return "";
     }
 
-    return "_ ".repeat(length).trim();
-  }, [isDrawer, drawerWord, gameState?.wordHint, gameState?.wordLength]);
+    return Array(length).fill("_").join(" ");
+  }, [
+    isDrawer,
+    drawerWord,
+    gameState?.hint,
+    gameState?.wordHint,
+    gameState?.wordLength,
+  ]);
 
   /*
    * --------------------------------------------------
@@ -125,58 +135,64 @@ function Game() {
 
   useEffect(() => {
     function requestGameState() {
-      socket.emit("getGameState");
+      if (!socket.connected) {
+        return;
+      }
+
+      socket.emit("requestGameState");
     }
+
+    /*
+     * Socket connected
+     */
 
     function handleConnect() {
       setConnected(true);
-
-      /*
-       * หลัง reconnect / refresh
-       * ขอ game state ใหม่
-       */
       requestGameState();
     }
+
+    /*
+     * Socket disconnected
+     */
 
     function handleDisconnect() {
       setConnected(false);
     }
 
+    /*
+     * Game started
+     */
+
     function handleGameStarted(data) {
-      /*
-       * บางระบบอาจส่ง room มากับ
-       * gameStarted แต่ยังไม่ได้ส่ง
-       * gameState ในจังหวะเดียวกัน
-       */
       if (data?.room) {
         setRoom(data.room);
       }
 
-      /*
-       * ขอ state ใหม่ทันที
-       */
       requestGameState();
     }
+
+    /*
+     * Game state
+     */
 
     function handleGameState(state) {
       if (!state) {
         return;
       }
 
+      const nextGameState = state.game || state;
+
       /*
-       * รองรับทั้ง
+       * สำคัญ:
        *
-       * { game: {...}, room: {...} }
+       * gameState เปลี่ยนได้ตอน hint เปลี่ยน
+       * เป็นเรื่องปกติ
        *
-       * และ
-       *
-       * {...gameState}
+       * แต่เราไม่ใส่ key ให้ DrawingBoard
+       * ดังนั้น DrawingBoard จะไม่ remount
        */
-      if (state.game) {
-        setGameState(state.game);
-      } else {
-        setGameState(state);
-      }
+
+      setGameState(nextGameState);
 
       if (state.room) {
         setRoom(state.room);
@@ -187,13 +203,35 @@ function Game() {
       }
     }
 
+    /*
+     * Word options
+     */
+
     function handleWordOptions(options) {
       setWordOptions(Array.isArray(options) ? options : []);
     }
 
-    function handleDrawerWord(word) {
-      setDrawerWord(word || "");
+    /*
+     * Drawer word
+     */
+
+    function handleDrawerWord(data) {
+      if (!data) {
+        setDrawerWord("");
+        return;
+      }
+
+      if (typeof data === "string") {
+        setDrawerWord(data);
+        return;
+      }
+
+      setDrawerWord(data.word || "");
     }
+
+    /*
+     * Room updated
+     */
 
     function handleRoomUpdated(updatedRoom) {
       if (!updatedRoom) {
@@ -202,6 +240,10 @@ function Game() {
 
       setRoom(updatedRoom);
     }
+
+    /*
+     * Guess result
+     */
 
     function handleGuessResult(result) {
       if (!result) {
@@ -226,12 +268,15 @@ function Game() {
 
       if (result.error) {
         setGuessMessage(result.error);
-
         return;
       }
 
       setGuessMessage(result.message || "Wrong guess.");
     }
+
+    /*
+     * Player guessed correctly
+     */
 
     function handlePlayerGuessedCorrectly(data) {
       if (!data) {
@@ -260,6 +305,10 @@ function Game() {
       ]);
     }
 
+    /*
+     * Chat
+     */
+
     function handleChatMessage(message) {
       if (!message) {
         return;
@@ -276,14 +325,22 @@ function Game() {
       ]);
     }
 
+    /*
+     * Game error
+     */
+
     function handleGameError(message) {
       const text =
         typeof message === "string"
           ? message
-          : message?.message || "Game error.";
+          : message?.message || message?.error || "Game error.";
 
       setGuessMessage(text);
     }
+
+    /*
+     * Player disconnected
+     */
 
     function handlePlayerDisconnected(data) {
       if (!data) {
@@ -329,20 +386,16 @@ function Game() {
     socket.on("playerDisconnected", handlePlayerDisconnected);
 
     /*
-     * ------------------------------------------------
-     * สำคัญมาก
-     *
-     * ถ้า socket connect อยู่แล้ว
-     * ตอนเข้า Game page จะไม่มี
-     * "connect" event ยิงซ้ำ
-     *
-     * ดังนั้นต้อง request ตรงนี้ด้วย
-     * ------------------------------------------------
+     * Socket connected ก่อนเข้า page
      */
 
     if (socket.connected) {
       requestGameState();
     }
+
+    /*
+     * Cleanup
+     */
 
     return () => {
       socket.off("connect", handleConnect);
@@ -373,7 +426,13 @@ function Game() {
 
   /*
    * --------------------------------------------------
-   * Reset turn UI
+   * Reset UI when a NEW TURN starts
+   *
+   * IMPORTANT:
+   * ไม่ผูกกับ hint
+   *
+   * ดังนั้น hint เปลี่ยนแล้ว
+   * จะไม่ reset chat / guessed players / drawer word
    * --------------------------------------------------
    */
 
@@ -431,7 +490,6 @@ function Game() {
 
   function handleLeave() {
     socket.emit("leaveRoom");
-
     navigate("/");
   }
 
@@ -533,9 +591,7 @@ function Game() {
 
   return (
     <div className="flex min-h-screen flex-col border-[3px] border-[#111111] bg-white font-sans text-[#1b1b1b]">
-      {/* ==========================================
-          TOP HEADER
-      ========================================== */}
+      {/* HEADER */}
 
       <div className="flex items-center justify-between border-b-[3px] border-[#111111] px-6 py-4">
         <h1 className="text-4xl font-black tracking-tight">Picasso?</h1>
@@ -549,13 +605,9 @@ function Game() {
         </button>
       </div>
 
-      {/* ==========================================
-          GAME BAR
-      ========================================== */}
+      {/* GAME BAR */}
 
       <section className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-8 pb-3 pt-6">
-        {/* Match stage */}
-
         <div className="flex items-center gap-4">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-[#ebebeb] text-xl">
             🎲
@@ -574,15 +626,11 @@ function Game() {
           </div>
         </div>
 
-        {/* Word */}
-
         <div className="min-w-[280px] rounded-2xl border-[3px] border-[#111111] bg-white px-10 py-3 text-center shadow-[0_4px_0_#111111]">
           <p className="text-xs font-semibold">{stageText}</p>
 
           <p className="text-2xl font-bold tracking-wide">{wordText}</p>
         </div>
-
-        {/* Timer */}
 
         <div className="flex items-center justify-self-end gap-4 rounded-full border-2 border-[#111111] bg-white px-4 py-2 shadow-[0_3px_0_#d4d4d4]">
           <div
@@ -619,9 +667,7 @@ function Game() {
         </div>
       </section>
 
-      {/* ==========================================
-          WORD HINT
-      ========================================== */}
+      {/* WORD HINT */}
 
       <section className="mx-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-[#ebebeb] px-6 py-3 text-sm">
         <p>
@@ -642,14 +688,10 @@ function Game() {
         </p>
       </section>
 
-      {/* ==========================================
-          MAIN 3 COLUMN
-      ========================================== */}
+      {/* MAIN */}
 
       <main className="grid min-h-[650px] flex-1 grid-cols-[300px_minmax(0,1fr)_300px] gap-4 px-6 pb-6 pt-5">
-        {/* ========================================
-            LEFT - PLAYERS
-        ======================================== */}
+        {/* PLAYERS */}
 
         <aside className="flex min-h-0 flex-col gap-3 rounded-[24px] bg-[#ebebeb] p-4">
           <div className="flex items-center justify-between px-1">
@@ -679,8 +721,6 @@ function Game() {
                       : "bg-white"
                   }`}
                 >
-                  {/* Avatar */}
-
                   <div
                     className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-xl"
                     style={{
@@ -699,8 +739,6 @@ function Game() {
                       </span>
                     )}
                   </div>
-
-                  {/* Info */}
 
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold">
@@ -728,8 +766,6 @@ function Game() {
                     </p>
                   </div>
 
-                  {/* Score */}
-
                   <p
                     className={`text-right text-xl font-medium leading-none ${
                       self ? "text-[#a2401c]" : ""
@@ -745,13 +781,9 @@ function Game() {
           </div>
         </aside>
 
-        {/* ========================================
-            CENTER - CANVAS
-        ======================================== */}
+        {/* DRAWING BOARD */}
 
         <section className="flex min-h-0 flex-col gap-3 rounded-[24px] bg-[#ebebeb] p-4">
-          {/* Canvas top bar */}
-
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -778,8 +810,6 @@ function Game() {
             </span>
           </div>
 
-          {/* Canvas */}
-
           <div className="relative min-h-[420px] flex-1 overflow-hidden rounded-[28px] bg-white shadow-[0_0_0_1px_#d4d4d4]">
             <div className="absolute left-3 top-3 z-10 rounded-full border-2 border-[#111111] bg-white px-4 py-1 text-xs font-semibold">
               {isDrawer
@@ -791,6 +821,19 @@ function Game() {
             </div>
 
             <div className="h-full w-full p-0">
+              {/*
+               * IMPORTANT:
+               *
+               * ห้ามใส่ key ที่เกี่ยวกับ
+               * gameState.hint
+               *
+               * เพราะ hint เปลี่ยนทุก 10 วินาที
+               * และจะทำให้ DrawingBoard remount
+               *
+               * ตอนนี้ DrawingBoard จะอยู่ component
+               * เดิมตลอดระหว่างรอบ
+               */}
+
               <DrawingBoard
                 disabled={!isDrawer || gameState.phase !== "draw-and-guess"}
               />
@@ -798,16 +841,12 @@ function Game() {
           </div>
         </section>
 
-        {/* ========================================
-            RIGHT - CHAT
-        ======================================== */}
+        {/* CHAT */}
 
         <aside className="flex min-h-0 flex-col gap-3 rounded-[24px] bg-[#ebebeb] p-4">
           <div className="px-1">
             <h2 className="text-xl font-medium">💬 Guesses & Chat</h2>
           </div>
-
-          {/* Chat log */}
 
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
             {chatMessages.length === 0 && (
@@ -860,8 +899,6 @@ function Game() {
             })}
           </div>
 
-          {/* Guess form */}
-
           {isDrawer ? (
             <div className="rounded-2xl bg-[#d4d4d4] px-4 py-4 text-center text-sm font-semibold text-[#666666]">
               ✎ You are drawing.
@@ -889,14 +926,6 @@ function Game() {
                   🐾
                 </button>
               </div>
-
-              <p className="pl-1 text-xs font-medium text-[#a2401c]">
-                {guessMessage ||
-                  `${Math.max(
-                    0,
-                    guessablePlayers - guessedCount,
-                  )} players still guessing`}
-              </p>
             </form>
           ) : (
             <div className="rounded-2xl bg-[#d4d4d4] px-4 py-4 text-center text-sm font-semibold text-[#666666]">
@@ -906,9 +935,7 @@ function Game() {
         </aside>
       </main>
 
-      {/* ==========================================
-          CHOOSE WORD
-      ========================================== */}
+      {/* CHOOSE WORD */}
 
       {gameState.phase === "choose-word" && isDrawer && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 px-6">
@@ -945,9 +972,7 @@ function Game() {
         </div>
       )}
 
-      {/* ==========================================
-          GAME RESULT
-      ========================================== */}
+      {/* GAME RESULT */}
 
       {gameState.phase === "game-result" && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 px-6">

@@ -18,17 +18,17 @@ const BRUSH_SIZES = [4, 8, 14, 22];
 
 function DrawingBoard({ disabled = false }) {
   const canvasRef = useRef(null);
-
   const containerRef = useRef(null);
 
   const isDrawingRef = useRef(false);
-
   const lastPointRef = useRef(null);
 
+  // เก็บสถานะ canvas ปัจจุบันไว้
+  // เพื่อไม่ให้ React/game state ทำให้ภาพหาย
+  const canvasReadyRef = useRef(false);
+
   const [color, setColor] = useState("#000000");
-
   const [brushSize, setBrushSize] = useState(8);
-
   const [mode, setMode] = useState("draw");
 
   function getContext() {
@@ -43,7 +43,6 @@ function DrawingBoard({ disabled = false }) {
 
   function clearCanvas() {
     const canvas = canvasRef.current;
-
     const context = getContext();
 
     if (!canvas || !context) {
@@ -53,7 +52,6 @@ function DrawingBoard({ disabled = false }) {
     context.save();
 
     context.globalCompositeOperation = "source-over";
-
     context.fillStyle = "#ffffff";
 
     context.fillRect(0, 0, canvas.width, canvas.height);
@@ -63,23 +61,10 @@ function DrawingBoard({ disabled = false }) {
 
   function resizeCanvas() {
     const canvas = canvasRef.current;
-
     const container = containerRef.current;
 
     if (!canvas || !container) {
       return;
-    }
-
-    const oldCanvas = document.createElement("canvas");
-
-    oldCanvas.width = canvas.width;
-
-    oldCanvas.height = canvas.height;
-
-    if (oldCanvas.width > 0 && oldCanvas.height > 0) {
-      const oldContext = oldCanvas.getContext("2d");
-
-      oldContext.drawImage(canvas, 0, 0);
     }
 
     const rect = container.getBoundingClientRect();
@@ -88,32 +73,62 @@ function DrawingBoard({ disabled = false }) {
 
     const height = Math.max(300, Math.floor(width * 0.62));
 
-    canvas.width = width;
+    // ถ้าขนาดเท่าเดิม ไม่ต้องทำอะไร
+    // สำคัญมาก เพราะไม่ควรแตะ canvas โดยไม่จำเป็น
+    if (
+      canvas.width === width &&
+      canvas.height === height &&
+      canvasReadyRef.current
+    ) {
+      return;
+    }
 
+    // เก็บภาพเดิม
+    let oldCanvas = null;
+
+    if (canvas.width > 0 && canvas.height > 0 && canvasReadyRef.current) {
+      oldCanvas = document.createElement("canvas");
+
+      oldCanvas.width = canvas.width;
+      oldCanvas.height = canvas.height;
+
+      const oldContext = oldCanvas.getContext("2d");
+
+      if (oldContext) {
+        oldContext.drawImage(canvas, 0, 0);
+      }
+    }
+
+    // เปลี่ยนขนาด canvas
+    canvas.width = width;
     canvas.height = height;
 
     clearCanvas();
 
-    if (oldCanvas.width > 0 && oldCanvas.height > 0) {
+    // คืนภาพเดิมกลับมา
+    if (oldCanvas && oldCanvas.width > 0 && oldCanvas.height > 0) {
       const context = getContext();
 
-      context.drawImage(
-        oldCanvas,
-        0,
-        0,
-        oldCanvas.width,
-        oldCanvas.height,
-        0,
-        0,
-        width,
-        height,
-      );
+      if (context) {
+        context.drawImage(
+          oldCanvas,
+          0,
+          0,
+          oldCanvas.width,
+          oldCanvas.height,
+          0,
+          0,
+          width,
+          height,
+        );
+      }
     }
+
+    canvasReadyRef.current = true;
   }
 
   function drawLine(points, lineColor, lineSize, lineMode) {
     const canvas = canvasRef.current;
-
     const context = getContext();
 
     if (!canvas || !context || !Array.isArray(points) || points.length < 2) {
@@ -123,9 +138,7 @@ function DrawingBoard({ disabled = false }) {
     context.save();
 
     context.lineCap = "round";
-
     context.lineJoin = "round";
-
     context.lineWidth = lineSize;
 
     context.globalCompositeOperation =
@@ -151,15 +164,27 @@ function DrawingBoard({ disabled = false }) {
   }
 
   function drawHistory(strokes) {
-    clearCanvas();
-
     if (!Array.isArray(strokes)) {
       return;
     }
 
+    // history คือการ sync canvas จาก server
+    // ดังนั้นตรงนี้ค่อย clear ได้
+    clearCanvas();
+
     for (const stroke of strokes) {
+      if (
+        !stroke ||
+        !Array.isArray(stroke.points) ||
+        stroke.points.length < 2
+      ) {
+        continue;
+      }
+
       drawLine(stroke.points, stroke.color, stroke.size, stroke.mode);
     }
+
+    canvasReadyRef.current = true;
   }
 
   function getPoint(event) {
@@ -170,6 +195,10 @@ function DrawingBoard({ disabled = false }) {
     }
 
     const rect = canvas.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
 
     const x = Math.min(
       1,
@@ -201,8 +230,14 @@ function DrawingBoard({ disabled = false }) {
     }
 
     isDrawingRef.current = true;
-
     lastPointRef.current = point;
+
+    // ป้องกัน pointer หลุดตอนลาก
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
   }
 
   function handlePointerMove(event) {
@@ -213,7 +248,6 @@ function DrawingBoard({ disabled = false }) {
     event.preventDefault();
 
     const point = getPoint(event);
-
     const lastPoint = lastPointRef.current;
 
     if (!point || !lastPoint) {
@@ -222,25 +256,34 @@ function DrawingBoard({ disabled = false }) {
 
     const points = [lastPoint, point];
 
+    // วาด local ก่อน
     drawLine(points, color, brushSize, mode);
 
+    // ส่งไป server
     socket.emit("draw:stroke", {
       points,
-
       color,
-
       size: brushSize,
-
       mode,
     });
 
     lastPointRef.current = point;
   }
 
-  function handlePointerUp() {
+  function handlePointerUp(event) {
     isDrawingRef.current = false;
-
     lastPointRef.current = null;
+
+    try {
+      if (
+        event?.currentTarget &&
+        event.currentTarget.hasPointerCapture?.(event.pointerId)
+      ) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // ignore
+    }
   }
 
   function handleClear() {
@@ -250,9 +293,18 @@ function DrawingBoard({ disabled = false }) {
 
     clearCanvas();
 
+    canvasReadyRef.current = true;
+
     socket.emit("draw:clear");
   }
 
+  /*
+   * Initial canvas setup
+   *
+   * สำคัญ:
+   * effect นี้ทำงานเฉพาะตอน mount
+   * ไม่ผูกกับ gameState / hint / round
+   */
   useEffect(() => {
     resizeCanvas();
 
@@ -267,13 +319,27 @@ function DrawingBoard({ disabled = false }) {
     };
   }, []);
 
+  /*
+   * Socket drawing events
+   *
+   * effect นี้ก็ทำงานแค่ตอน mount
+   * hint เปลี่ยนจะไม่สร้าง socket listener ใหม่
+   */
   useEffect(() => {
     function handleRemoteStroke(stroke) {
+      if (!stroke) {
+        return;
+      }
+
       drawLine(stroke.points, stroke.color, stroke.size, stroke.mode);
+
+      canvasReadyRef.current = true;
     }
 
     function handleRemoteClear() {
       clearCanvas();
+
+      canvasReadyRef.current = true;
     }
 
     function handleHistory(strokes) {
@@ -295,9 +361,17 @@ function DrawingBoard({ disabled = false }) {
     };
   }, []);
 
-  useEffect(() => {
-    clearCanvas();
-  }, [disabled]);
+  /*
+   * ห้ามมี:
+   *
+   * useEffect(() => {
+   *   clearCanvas();
+   * }, [disabled]);
+   *
+   * เพราะ disabled เปลี่ยนตอนเริ่ม/จบ turn
+   * และไม่ควรให้การเปลี่ยน permission ของคนวาด
+   * ไปทำลายภาพบนกระดาน
+   */
 
   return (
     <div className="flex flex-col gap-3">
@@ -320,6 +394,7 @@ function DrawingBoard({ disabled = false }) {
 
       {!disabled && (
         <div className="flex flex-wrap items-center gap-3 rounded-[14px] border-2 border-black bg-white p-3">
+          {/* Colors */}
           <div className="flex items-center gap-2">
             {COLORS.map((itemColor) => (
               <button
@@ -327,7 +402,6 @@ function DrawingBoard({ disabled = false }) {
                 type="button"
                 onClick={() => {
                   setColor(itemColor);
-
                   setMode("draw");
                 }}
                 className={`h-7 w-7 rounded-full border-2 ${
@@ -344,6 +418,7 @@ function DrawingBoard({ disabled = false }) {
 
           <div className="h-6 w-px bg-[#cccccc]" />
 
+          {/* Brush sizes */}
           <div className="flex items-center gap-2">
             {BRUSH_SIZES.map((size) => (
               <button
@@ -358,7 +433,6 @@ function DrawingBoard({ disabled = false }) {
                   className="rounded-full bg-black"
                   style={{
                     width: Math.min(size, 18),
-
                     height: Math.min(size, 18),
                   }}
                 />
@@ -368,6 +442,7 @@ function DrawingBoard({ disabled = false }) {
 
           <div className="h-6 w-px bg-[#cccccc]" />
 
+          {/* Eraser */}
           <button
             type="button"
             onClick={() => setMode(mode === "erase" ? "draw" : "erase")}
@@ -378,6 +453,7 @@ function DrawingBoard({ disabled = false }) {
             Eraser
           </button>
 
+          {/* Clear */}
           <button
             type="button"
             onClick={handleClear}

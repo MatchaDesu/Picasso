@@ -73,7 +73,8 @@ function serializePlayer(
     return {
         id: player.id,
 
-        name: player.name,
+        name:
+            player.name,
 
         isLoggedIn:
             Boolean(
@@ -102,11 +103,14 @@ function serializeRoom(
     return {
         id: room.id,
 
-        title: room.title,
+        title:
+            room.title,
 
-        hostId: room.hostId,
+        hostId:
+            room.hostId,
 
-        status: room.status,
+        status:
+            room.status,
 
         settings: {
             drawingTime:
@@ -146,7 +150,9 @@ function emitRoomUpdate(
         return
     }
 
-    io.to(room.id).emit(
+    io.to(
+        room.id
+    ).emit(
         "roomUpdated",
         serializeRoom(room)
     )
@@ -163,7 +169,8 @@ function emitPlayerProfile(
 
             isLoggedIn:
                 Boolean(
-                    socket.data.isLoggedIn
+                    socket.data
+                        .isLoggedIn
                 ),
 
             avatar:
@@ -174,6 +181,12 @@ function emitPlayerProfile(
     )
 }
 
+/*
+|--------------------------------------------------------------------------
+| Game State
+|--------------------------------------------------------------------------
+*/
+
 function emitGameState(
     io,
     game
@@ -181,6 +194,23 @@ function emitGameState(
     if (!game) {
         return
     }
+
+    /*
+     * ส่ง public game state
+     *
+     * ห้ามส่ง draw:clear ที่นี่
+     *
+     * เพราะฟังก์ชันนี้ถูกเรียกจาก:
+     *
+     * - Hint
+     * - Guess
+     * - Phase change
+     * - Timer
+     * - Player state
+     *
+     * ถ้า clear ตรงนี้ Canvas จะ reset
+     * ทุกครั้งที่ Hint เพิ่ม
+     */
 
     io.to(
         game.roomId
@@ -190,6 +220,10 @@ function emitGameState(
             game
         )
     )
+
+    /*
+     * Choose Word
+     */
 
     if (
         game.phase ===
@@ -210,6 +244,10 @@ function emitGameState(
         return
     }
 
+    /*
+     * Draw and Guess
+     */
+
     if (
         game.phase ===
         "draw-and-guess"
@@ -229,11 +267,11 @@ function emitGameState(
             )
         }
 
-        io.to(
-            game.roomId
-        ).emit(
-            "draw:clear"
-        )
+        /*
+         * Guess History
+         *
+         * ไม่ clear Canvas
+         */
 
         io.to(
             game.roomId
@@ -244,6 +282,10 @@ function emitGameState(
 
         return
     }
+
+    /*
+     * Game Result
+     */
 
     if (
         game.phase ===
@@ -260,6 +302,12 @@ function emitGameState(
         )
     }
 }
+
+/*
+|--------------------------------------------------------------------------
+| Send Current Game State To One Socket
+|--------------------------------------------------------------------------
+*/
 
 function emitCurrentGameStateToSocket(
     socket
@@ -287,6 +335,10 @@ function emitCurrentGameStateToSocket(
         )
     )
 
+    /*
+     * Choose Word
+     */
+
     if (
         game.phase ===
         "choose-word" &&
@@ -299,10 +351,18 @@ function emitCurrentGameStateToSocket(
         )
     }
 
+    /*
+     * Draw and Guess
+     */
+
     if (
         game.phase ===
         "draw-and-guess"
     ) {
+        /*
+         * Drawer ได้คำจริง
+         */
+
         if (
             game.drawerId ===
             socket.id
@@ -316,6 +376,13 @@ function emitCurrentGameStateToSocket(
             )
         }
 
+        /*
+         * Reconnect:
+         * ส่ง drawing history
+         *
+         * ไม่ clear Canvas
+         */
+
         socket.emit(
             "draw:history",
             game.strokes
@@ -327,6 +394,12 @@ function emitCurrentGameStateToSocket(
         )
     }
 }
+
+/*
+|--------------------------------------------------------------------------
+| Start Game
+|--------------------------------------------------------------------------
+*/
 
 function startGame(
     io,
@@ -418,35 +491,83 @@ function startGame(
                 !player.disconnected
         )
 
+    /*
+     * สร้าง game
+     *
+     * onPhaseChange:
+     * update game state
+     *
+     * onTurnStart:
+     * clear Canvas เฉพาะตอน
+     * เริ่มคำใหม่
+     */
+
     const game =
         gameManager.createGame(
             roomId,
             players,
             room.settings
-                .drawingTime
+                .drawingTime,
+
+            /*
+             * onPhaseChange
+             */
+            (updatedGame) => {
+                emitGameState(
+                    io,
+                    updatedGame
+                )
+            },
+
+            /*
+             * onTurnStart
+             */
+            (updatedGame) => {
+                io.to(
+                    updatedGame.roomId
+                ).emit(
+                    "draw:clear"
+                )
+            }
         )
 
     room.status =
         "playing"
 
-    io.to(roomId).emit(
+    io.to(
+        roomId
+    ).emit(
         "gameStarted",
         {
             roomId,
         }
     )
 
+    /*
+     * createGame() เรียก
+     * onPhaseChange ไปแล้ว
+     *
+     * แต่ emitGameState อีกครั้งตรงนี้
+     * ไม่เป็นปัญหา
+     */
     emitGameState(
         io,
         game
     )
 }
 
+/*
+|--------------------------------------------------------------------------
+| Player
+|--------------------------------------------------------------------------
+*/
+
 function createPlayerFromSocket(
     socket
 ) {
     return {
-        id: socket.id,
+        id:
+            socket.id,
 
         name:
             socket.data.name,
@@ -463,10 +584,15 @@ function createPlayerFromSocket(
 
         disconnected: false,
 
-        disconnectedAt:
-            null,
+        disconnectedAt: null,
     }
 }
+
+/*
+|--------------------------------------------------------------------------
+| Cleanup Disconnected Player
+|--------------------------------------------------------------------------
+*/
 
 function cleanupDisconnectedPlayer(
     io,
@@ -495,33 +621,19 @@ function cleanupDisconnectedPlayer(
         return
     }
 
+    /*
+     * Player กลับมา reconnect แล้ว
+     */
+
     if (
         !player.disconnected
     ) {
         return
     }
 
-    const game =
-        gameManager.getGame(
-            roomId
-        )
-
-    if (game) {
-        const result =
-            gameManager.removePlayer(
-                roomId,
-                oldPlayerId
-            )
-
-        if (
-            result.changed
-        ) {
-            emitGameState(
-                io,
-                result.game
-            )
-        }
-    }
+    /*
+     * ลบ player ออกจาก room
+     */
 
     const updatedRoom =
         roomManager.removePlayer(
@@ -538,7 +650,9 @@ function cleanupDisconnectedPlayer(
         return
     }
 
-    io.to(roomId).emit(
+    io.to(
+        roomId
+    ).emit(
         "playerDisconnected",
         {
             playerId:
@@ -551,6 +665,12 @@ function cleanupDisconnectedPlayer(
         updatedRoom
     )
 }
+
+/*
+|--------------------------------------------------------------------------
+| Disconnect
+|--------------------------------------------------------------------------
+*/
 
 function handleDisconnect(
     io,
@@ -577,7 +697,9 @@ function handleDisconnect(
         socket.id
     )
 
-    io.to(roomId).emit(
+    io.to(
+        roomId
+    ).emit(
         "playerDisconnected",
         {
             playerId:
@@ -611,6 +733,12 @@ function handleDisconnect(
     )
 }
 
+/*
+|--------------------------------------------------------------------------
+| Leave Room
+|--------------------------------------------------------------------------
+*/
+
 function leaveCurrentRoom(
     io,
     socket
@@ -635,7 +763,8 @@ function leaveCurrentRoom(
             )
 
         if (
-            result.changed
+            result.changed &&
+            result.game
         ) {
             emitGameState(
                 io,
@@ -666,7 +795,9 @@ function leaveCurrentRoom(
         return
     }
 
-    io.to(roomId).emit(
+    io.to(
+        roomId
+    ).emit(
         "playerLeft",
         {
             playerId:
@@ -680,12 +811,22 @@ function leaveCurrentRoom(
     )
 }
 
+/*
+|--------------------------------------------------------------------------
+| Register Socket Handlers
+|--------------------------------------------------------------------------
+*/
+
 function registerSocketHandlers(
     io
 ) {
     io.on(
         "connection",
         (socket) => {
+            /*
+             * Default player profile
+             */
+
             const guestName =
                 generateGuestName()
 
@@ -695,8 +836,7 @@ function registerSocketHandlers(
             socket.data.isLoggedIn =
                 false
 
-            socket.data.avatar =
-            {
+            socket.data.avatar = {
                 ...DEFAULT_AVATAR,
             }
 
@@ -711,6 +851,10 @@ function registerSocketHandlers(
                 `User connected: ${socket.id} as ${guestName}`
             )
 
+            /*
+             * Get Player Profile
+             */
+
             socket.on(
                 "getPlayerProfile",
                 () => {
@@ -719,6 +863,10 @@ function registerSocketHandlers(
                     )
                 }
             )
+
+            /*
+             * Resume Room
+             */
 
             socket.on(
                 "resumeRoom",
@@ -782,7 +930,8 @@ function registerSocketHandlers(
                             normalizedRoomId,
                             oldPlayerId,
                             {
-                                id: socket.id,
+                                id:
+                                    socket.id,
 
                                 name:
                                     oldPlayer.name,
@@ -888,11 +1037,16 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Set Player Name
+             */
+
             socket.on(
                 "setPlayerName",
                 (name) => {
                     if (
-                        !socket.data.isLoggedIn
+                        !socket.data
+                            .isLoggedIn
                     ) {
                         return
                     }
@@ -941,6 +1095,10 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Set Player Avatar
+             */
+
             socket.on(
                 "setPlayerAvatar",
                 (avatar) => {
@@ -983,6 +1141,10 @@ function registerSocketHandlers(
                     )
                 }
             )
+
+            /*
+             * Create Room
+             */
 
             socket.on(
                 "createRoom",
@@ -1082,6 +1244,10 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Get Rooms
+             */
+
             socket.on(
                 "getRooms",
                 () => {
@@ -1096,6 +1262,10 @@ function registerSocketHandlers(
                     )
                 }
             )
+
+            /*
+             * Join Room
+             */
 
             socket.on(
                 "joinRoom",
@@ -1248,6 +1418,10 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Get Room
+             */
+
             socket.on(
                 "getRoom",
                 (roomId) => {
@@ -1279,6 +1453,10 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Request Game State
+             */
+
             socket.on(
                 "requestGameState",
                 () => {
@@ -1287,6 +1465,10 @@ function registerSocketHandlers(
                     )
                 }
             )
+
+            /*
+             * Start Game
+             */
 
             socket.on(
                 "startGame",
@@ -1297,6 +1479,10 @@ function registerSocketHandlers(
                     )
                 }
             )
+
+            /*
+             * Select Word
+             */
 
             socket.on(
                 "selectWord",
@@ -1312,13 +1498,7 @@ function registerSocketHandlers(
                         gameManager.selectWord(
                             roomId,
                             socket.id,
-                            word,
-                            (game) => {
-                                emitGameState(
-                                    io,
-                                    game
-                                )
-                            }
+                            word
                         )
 
                     if (
@@ -1331,9 +1511,33 @@ function registerSocketHandlers(
                                     result.error,
                             }
                         )
+
+                        return
                     }
+
+                    /*
+                     * สำคัญ:
+                     *
+                     * selectWord() จะเรียก
+                     * onTurnStart เอง
+                     *
+                     * ดังนั้นตรงนี้ไม่ต้อง
+                     * draw:clear ซ้ำ
+                     *
+                     * และ Hint ก็จะไม่เข้ามา
+                     * clear Canvas
+                     */
+
+                    emitGameState(
+                        io,
+                        result.game
+                    )
                 }
             )
+
+            /*
+             * Submit Guess
+             */
 
             socket.on(
                 "submitGuess",
@@ -1358,7 +1562,8 @@ function registerSocketHandlers(
                         socket.emit(
                             "guessResult",
                             {
-                                correct: false,
+                                correct:
+                                    false,
 
                                 error:
                                     result.error,
@@ -1374,7 +1579,8 @@ function registerSocketHandlers(
                         socket.emit(
                             "guessResult",
                             {
-                                correct: false,
+                                correct:
+                                    false,
 
                                 alreadyGuessed:
                                     true,
@@ -1409,17 +1615,23 @@ function registerSocketHandlers(
                         socket.emit(
                             "guessResult",
                             {
-                                correct: false,
+                                correct:
+                                    false,
                             }
                         )
 
                         return
                     }
 
+                    /*
+                     * Correct Guess
+                     */
+
                     socket.emit(
                         "guessResult",
                         {
-                            correct: true,
+                            correct:
+                                true,
 
                             points:
                                 result.points,
@@ -1444,6 +1656,10 @@ function registerSocketHandlers(
                             roomId
                         )
 
+                    /*
+                     * ทุกคนตอบถูกแล้ว
+                     */
+
                     if (
                         result.allGuessed &&
                         game
@@ -1452,6 +1668,15 @@ function registerSocketHandlers(
                             game
                         )
 
+                        /*
+                         * finishTurn()
+                         * อาจเปลี่ยนเป็น
+                         * choose-word
+                         *
+                         * แต่ไม่ clear Canvas
+                         * ตรงนี้
+                         */
+
                         emitGameState(
                             io,
                             game
@@ -1459,6 +1684,10 @@ function registerSocketHandlers(
 
                         return
                     }
+
+                    /*
+                     * ยังมีคนเหลือ
+                     */
 
                     if (game) {
                         io.to(
@@ -1469,9 +1698,20 @@ function registerSocketHandlers(
                                 game
                             )
                         )
+
+                        io.to(
+                            roomId
+                        ).emit(
+                            "guessHistory",
+                            game.guessMessages
+                        )
                     }
                 }
             )
+
+            /*
+             * Drawing Stroke
+             */
 
             socket.on(
                 "draw:stroke",
@@ -1505,6 +1745,10 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Clear Drawing
+             */
+
             socket.on(
                 "draw:clear",
                 () => {
@@ -1535,6 +1779,10 @@ function registerSocketHandlers(
                 }
             )
 
+            /*
+             * Leave Room
+             */
+
             socket.on(
                 "leaveRoom",
                 () => {
@@ -1563,6 +1811,10 @@ function registerSocketHandlers(
                     )
                 }
             )
+
+            /*
+             * Disconnect
+             */
 
             socket.on(
                 "disconnect",
