@@ -2,7 +2,6 @@ const MAX_PLAYERS = 8
 const MIN_PLAYERS = 3
 
 class RoomManager {
-
     constructor() {
         this.rooms = new Map()
     }
@@ -12,12 +11,13 @@ class RoomManager {
         host,
         settings = {}
     ) {
-
         const room = {
             id: roomId,
 
             title:
-                String(settings.title || "").trim() ||
+                String(
+                    settings.title || ""
+                ).trim() ||
                 "Untitled Room",
 
             hostId: host.id,
@@ -26,7 +26,9 @@ class RoomManager {
 
             settings: {
                 drawingTime:
-                    Number(settings.drawingTime) || 60,
+                    Number(
+                        settings.drawingTime
+                    ) || 60,
             },
 
             players: new Map(),
@@ -46,37 +48,47 @@ class RoomManager {
     }
 
     getRoom(roomId) {
-        return this.rooms.get(roomId)
+        return this.rooms.get(
+            roomId
+        )
     }
 
     hasRoom(roomId) {
-        return this.rooms.has(roomId)
+        return this.rooms.has(
+            roomId
+        )
     }
 
     addPlayer(
         roomId,
         player
     ) {
-
         const room =
             this.getRoom(roomId)
 
         if (!room) {
             return {
                 success: false,
-                error: "ROOM_NOT_FOUND",
-            }
-        }
-
-        if (room.status !== "waiting") {
-            return {
-                success: false,
-                error: "GAME_ALREADY_STARTED",
+                error:
+                    "ROOM_NOT_FOUND",
             }
         }
 
         if (
-            room.players.has(player.id)
+            room.status !==
+            "waiting"
+        ) {
+            return {
+                success: false,
+                error:
+                    "GAME_ALREADY_STARTED",
+            }
+        }
+
+        if (
+            room.players.has(
+                player.id
+            )
         ) {
             return {
                 success: true,
@@ -84,12 +96,22 @@ class RoomManager {
             }
         }
 
+        const activePlayers =
+            Array.from(
+                room.players.values()
+            ).filter(
+                (item) =>
+                    !item.disconnected
+            )
+
         if (
-            room.players.size >= MAX_PLAYERS
+            activePlayers.length >=
+            MAX_PLAYERS
         ) {
             return {
                 success: false,
-                error: "ROOM_FULL",
+                error:
+                    "ROOM_FULL",
             }
         }
 
@@ -104,11 +126,109 @@ class RoomManager {
         }
     }
 
+    markPlayerDisconnected(
+        roomId,
+        playerId
+    ) {
+        const room =
+            this.getRoom(roomId)
+
+        if (!room) {
+            return null
+        }
+
+        const player =
+            room.players.get(
+                playerId
+            )
+
+        if (!player) {
+            return null
+        }
+
+        player.disconnected =
+            true
+
+        player.disconnectedAt =
+            Date.now()
+
+        return room
+    }
+
+    reconnectPlayer(
+        roomId,
+        oldPlayerId,
+        newPlayer
+    ) {
+        const room =
+            this.getRoom(roomId)
+
+        if (!room) {
+            return {
+                success: false,
+                error:
+                    "ROOM_NOT_FOUND",
+            }
+        }
+
+        const oldPlayer =
+            room.players.get(
+                oldPlayerId
+            )
+
+        if (!oldPlayer) {
+            return {
+                success: false,
+                error:
+                    "PLAYER_NOT_FOUND",
+            }
+        }
+
+        room.players.delete(
+            oldPlayerId
+        )
+
+        const restoredPlayer = {
+            ...oldPlayer,
+
+            ...newPlayer,
+
+            id: newPlayer.id,
+
+            disconnected: false,
+
+            disconnectedAt:
+                null,
+        }
+
+        room.players.set(
+            newPlayer.id,
+            restoredPlayer
+        )
+
+        if (
+            room.hostId ===
+            oldPlayerId
+        ) {
+            room.hostId =
+                newPlayer.id
+        }
+
+        return {
+            success: true,
+            room,
+
+            player:
+                restoredPlayer,
+
+            oldPlayerId,
+        }
+    }
+
     removePlayer(
         roomId,
         playerId
     ) {
-
         const room =
             this.getRoom(roomId)
 
@@ -123,7 +243,6 @@ class RoomManager {
         if (
             room.players.size === 0
         ) {
-
             this.rooms.delete(
                 roomId
             )
@@ -132,24 +251,31 @@ class RoomManager {
         }
 
         if (
-            room.hostId === playerId
+            room.hostId ===
+            playerId
         ) {
-
             const nextHost =
+                Array.from(
+                    room.players.values()
+                ).find(
+                    (player) =>
+                        !player.disconnected
+                ) ||
                 room.players
                     .values()
                     .next()
                     .value
 
-            room.hostId =
-                nextHost.id
+            if (nextHost) {
+                room.hostId =
+                    nextHost.id
+            }
         }
 
         return room
     }
 
     canStart(roomId) {
-
         const room =
             this.getRoom(roomId)
 
@@ -157,14 +283,23 @@ class RoomManager {
             return false
         }
 
+        const activePlayers =
+            Array.from(
+                room.players.values()
+            ).filter(
+                (player) =>
+                    !player.disconnected
+            )
+
         return (
-            room.status === "waiting" &&
-            room.players.size >= MIN_PLAYERS
+            room.status ===
+            "waiting" &&
+            activePlayers.length >=
+            MIN_PLAYERS
         )
     }
 
     isFull(roomId) {
-
         const room =
             this.getRoom(roomId)
 
@@ -172,13 +307,24 @@ class RoomManager {
             return false
         }
 
+        const activePlayers =
+            Array.from(
+                room.players.values()
+            ).filter(
+                (player) =>
+                    !player.disconnected
+            )
+
         return (
-            room.players.size >= MAX_PLAYERS
+            activePlayers.length >=
+            MAX_PLAYERS
         )
     }
 
     deleteRoom(roomId) {
-        return this.rooms.delete(roomId)
+        return this.rooms.delete(
+            roomId
+        )
     }
 
     getRooms() {

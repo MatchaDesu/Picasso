@@ -1,14 +1,17 @@
+import { Link } from "react-router-dom";
+import PicassoLogo from "../assets/Picasso.png"
+
 function Header() {
   return (
     <header className="sticky top-0 z-100 flex h-[72px] w-full items-center justify-between border-b-2 border-black bg-white px-9">
       {/* Logo */}
-      <div className="flex items-center">
+      <Link to="/" className="flex items-center">
         <img
-          src="/Picasso_.png"
-          alt="Picasso? Logo"
+          src={PicassoLogo}
+          alt="Picasso Logo"
           className="h-12 w-auto object-contain"
         />
-      </div>
+      </Link>
 
       {/* Sign in */}
       <button

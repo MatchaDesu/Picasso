@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+
 import { useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
@@ -8,39 +9,35 @@ import socket from "../socket";
 function BrowseRoom() {
   const navigate = useNavigate();
 
-  const [search, setSearch] = useState("");
   const [rooms, setRooms] = useState([]);
+
   const [isLoading, setIsLoading] = useState(true);
-  const [joiningRoomId, setJoiningRoomId] = useState(null);
+
+  const [error, setError] = useState("");
+
+  function loadRooms() {
+    setIsLoading(true);
+
+    setError("");
+
+    socket.emit("getRooms");
+  }
 
   useEffect(() => {
     function handleRoomsList(roomList) {
-      setRooms(roomList);
+      setRooms(roomList || []);
+
       setIsLoading(false);
     }
 
-    function handleRoomUpdated(updatedRoom) {
-      setRooms((currentRooms) => {
-        const exists = currentRooms.some((room) => room.id === updatedRoom.id);
-
-        if (!exists) {
-          return [...currentRooms, updatedRoom];
-        }
-
-        return currentRooms.map((room) =>
-          room.id === updatedRoom.id ? updatedRoom : room,
-        );
-      });
-    }
-
-    function handleRoomClosed(roomId) {
-      setRooms((currentRooms) =>
-        currentRooms.filter((room) => room.id !== roomId),
-      );
+    function handleRoomListChanged() {
+      socket.emit("getRooms");
     }
 
     function handleRoomJoined(room) {
-      setJoiningRoomId(null);
+      sessionStorage.setItem("picassoRoomId", room.id);
+
+      sessionStorage.setItem("picassoPlayerId", socket.id);
 
       navigate("/waiting-room", {
         state: {
@@ -50,29 +47,37 @@ function BrowseRoom() {
     }
 
     function handleRoomError(data) {
-      setJoiningRoomId(null);
+      const messages = {
+        ROOM_NOT_FOUND: "Room not found.",
 
-      console.error("Room error:", data.error);
+        ROOM_FULL: "Room is full.",
+
+        GAME_ALREADY_STARTED: "This game has already started.",
+
+        ALREADY_IN_ROOM: "You are already in a room.",
+
+        INVALID_ROOM_ID: "Invalid room code.",
+      };
+
+      setError(messages[data?.error] || "Unable to join room.");
+
+      setIsLoading(false);
     }
 
     socket.on("roomsList", handleRoomsList);
 
-    socket.on("roomUpdated", handleRoomUpdated);
-
-    socket.on("roomClosed", handleRoomClosed);
+    socket.on("roomListChanged", handleRoomListChanged);
 
     socket.on("roomJoined", handleRoomJoined);
 
     socket.on("roomError", handleRoomError);
 
-    socket.emit("getRooms");
+    loadRooms();
 
     return () => {
       socket.off("roomsList", handleRoomsList);
 
-      socket.off("roomUpdated", handleRoomUpdated);
-
-      socket.off("roomClosed", handleRoomClosed);
+      socket.off("roomListChanged", handleRoomListChanged);
 
       socket.off("roomJoined", handleRoomJoined);
 
@@ -81,109 +86,105 @@ function BrowseRoom() {
   }, [navigate]);
 
   function handleJoinRoom(roomId) {
-    if (joiningRoomId) {
-      return;
-    }
-
-    setJoiningRoomId(roomId);
+    setError("");
 
     socket.emit("joinRoom", roomId);
   }
-
-  const filteredRooms = rooms.filter((room) =>
-    room.title.toLowerCase().includes(search.toLowerCase()),
-  );
 
   return (
     <div className="flex min-h-screen flex-col bg-white text-black">
       <Header />
 
-      <main className="flex flex-1 justify-center px-6 py-8">
-        <div className="w-full max-w-[700px]">
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="mb-5 font-extrabold"
-          >
-            ← Back to Lobby
-          </button>
+      <main className="mx-auto flex w-full max-w-[1080px] flex-1 flex-col px-6 py-8">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="mb-4 font-extrabold"
+            >
+              ← Back to Lobby
+            </button>
 
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold">Browse Rooms</h2>
+            <h2 className="text-2xl font-black">Browse Rooms</h2>
 
-            <p className="mt-2 text-sm text-[#666666]">
-              Find a room and join the drawing party.
+            <p className="mt-1 text-sm text-[#666666]">
+              Join an available drawing room.
             </p>
           </div>
 
-          <input
-            type="text"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search room..."
-            className="mb-5 h-11 w-full rounded-full border-2 border-black px-5 text-sm outline-none placeholder:text-[#666666]"
-          />
-
-          <div className="flex flex-col gap-3">
-            {isLoading ? (
-              <div className="rounded-[16px] border-2 border-black p-8 text-center">
-                <p className="font-bold">Loading rooms...</p>
-              </div>
-            ) : filteredRooms.length > 0 ? (
-              filteredRooms.map((room) => {
-                const isFull = room.playerCount >= room.maxPlayers;
-
-                const isJoining = joiningRoomId === room.id;
-
-                const host = room.players?.find(
-                  (player) => player.id === room.hostId,
-                );
-
-                return (
-                  <div
-                    key={room.id}
-                    className="flex items-center justify-between rounded-[16px] border-2 border-black p-4"
-                  >
-                    <div className="min-w-0">
-                      <h3 className="truncate text-base font-bold">
-                        {room.title}
-                      </h3>
-
-                      <p className="mt-1 text-xs text-[#666666]">
-                        Host: {host?.name || "Unknown"}
-                      </p>
-                    </div>
-
-                    <div className="ml-4 flex shrink-0 items-center gap-4">
-                      <span className="text-xs font-bold">
-                        {room.playerCount} / {room.maxPlayers} Players
-                      </span>
-
-                      <button
-                        type="button"
-                        disabled={isFull || isJoining}
-                        onClick={() => handleJoinRoom(room.id)}
-                        className="rounded-full border-2 border-black bg-[#d6f679] px-4 py-2 text-xs font-bold transition hover:opacity-80 disabled:cursor-not-allowed disabled:bg-[#e5e5e5] disabled:opacity-60"
-                      >
-                        {isJoining ? "Joining..." : isFull ? "Full" : "Join →"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="rounded-[16px] border-2 border-black p-8 text-center">
-                <p className="font-bold">No rooms found</p>
-
-                <p className="mt-1 text-sm text-[#666666]">
-                  {rooms.length === 0
-                    ? "There are no active rooms right now."
-                    : "Try searching for another room."}
-                </p>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={loadRooms}
+            className="rounded-full border-2 border-black bg-white px-5 py-2 text-sm font-bold transition hover:bg-[#e5e5e5]"
+          >
+            Refresh
+          </button>
         </div>
+
+        {error && (
+          <div className="mb-5 rounded-[12px] border-2 border-black bg-[#ffe7e7] p-3 text-sm font-bold">
+            {error}
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="rounded-[16px] border-2 border-black p-8 text-center">
+            <p className="text-sm font-bold">Loading rooms...</p>
+          </div>
+        ) : rooms.length === 0 ? (
+          <div className="rounded-[16px] border-2 border-dashed border-[#cccccc] p-10 text-center">
+            <p className="text-lg font-bold">No rooms available</p>
+
+            <p className="mt-2 text-sm text-[#666666]">
+              Create a room and invite your friends.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => navigate("/create-room")}
+              className="mt-5 rounded-full border-2 border-black bg-[#d6f679] px-6 py-3 text-sm font-bold"
+            >
+              Create Room →
+            </button>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {rooms.map((room) => {
+              const players = room.players || [];
+
+              const full = players.length >= room.maxPlayers;
+
+              return (
+                <div
+                  key={room.id}
+                  className="flex items-center justify-between gap-4 rounded-[16px] border-2 border-black p-5"
+                >
+                  <div>
+                    <h3 className="font-black">{room.title}</h3>
+
+                    <p className="mt-1 text-xs text-[#666666]">
+                      Code: <span className="font-bold">{room.id}</span>
+                    </p>
+
+                    <p className="mt-1 text-xs text-[#666666]">
+                      {players.length} / {room.maxPlayers} players
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={full}
+                    onClick={() => handleJoinRoom(room.id)}
+                    className="rounded-full border-2 border-black bg-[#d6f679] px-6 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {full ? "Full" : "Join →"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </main>
 
       <Footer />

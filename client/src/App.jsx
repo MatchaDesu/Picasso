@@ -4,6 +4,7 @@ import Home from "./pages/Home";
 import CreateRoom from "./pages/CreateRoom";
 import BrowseRoom from "./pages/BrowseRoom";
 import WaitingRoom from "./pages/WaitingRoom";
+import Game from "./pages/Game";
 
 function App() {
   return (
@@ -16,6 +17,8 @@ function App() {
         <Route path="/browse-room" element={<BrowseRoom />} />
 
         <Route path="/waiting-room" element={<WaitingRoom />} />
+
+        <Route path="/game" element={<Game />} />
       </Routes>
     </BrowserRouter>
   );
