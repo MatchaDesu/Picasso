@@ -1,6 +1,8 @@
 import { io } from "socket.io-client"
 
-const socket = io(import.meta.env.VITE_SOCKET_URL)
+// ไม่ตั้ง VITE_SOCKET_URL = ต่อ origin เดียวกับหน้าเว็บ (ผ่าน proxy ของ Vite / nginx)
+// ต้องเป็น undefined ไม่ใช่ "" เพราะ io("") จะต่อไปที่ URL ผิด
+const socket = io(import.meta.env.VITE_SOCKET_URL || undefined)
 
 /*
  * --------------------------------------------------

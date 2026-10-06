@@ -461,4 +461,5 @@ module.exports = {
     MAX_PLAYERS,
     MIN_PLAYERS,
     SETTINGS_OPTIONS,
+    DEFAULT_SETTINGS,
 }

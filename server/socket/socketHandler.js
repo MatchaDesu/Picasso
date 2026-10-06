@@ -3,6 +3,7 @@ const crypto = require("crypto")
 const {
     RoomManager,
     SETTINGS_OPTIONS,
+    DEFAULT_SETTINGS,
 } = require("../managers/RoomManager")
 
 const {
@@ -1555,6 +1556,8 @@ function registerSocketHandlers(
                     roomId,
                     roomTitle,
                     drawingTime,
+                    rounds,
+                    category,
                 } = {}) => {
                     const normalizedRoomId =
                         String(
@@ -1606,8 +1609,11 @@ function registerSocketHandlers(
                                 title:
                                     roomTitle,
 
-                                drawingTime:
-                                    drawingTime,
+                                drawingTime,
+
+                                rounds,
+
+                                category,
                             }
                         )
 
@@ -1870,6 +1876,27 @@ function registerSocketHandlers(
                 () => {
                     emitCurrentGameStateToSocket(
                         socket
+                    )
+                }
+            )
+
+            /*
+             * Room Settings Options
+             * (หน้า Create Room ใช้ก่อนมีห้อง)
+             */
+
+            socket.on(
+                "getRoomSettingsOptions",
+                () => {
+                    socket.emit(
+                        "roomSettingsOptions",
+                        {
+                            options:
+                                SETTINGS_OPTIONS,
+
+                            defaults:
+                                DEFAULT_SETTINGS,
+                        }
                     )
                 }
             )
