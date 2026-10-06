@@ -44,16 +44,16 @@ export const DEFAULT_AVATAR = {
 export const BODY_SIZE = { width: 425.27, height: 507.75 };
 
 const EAR_LAYOUT = {
-  L: { x: 46.9, y: -150, width: 331.5, height: 210.84 },
-  N: { x: 46.9, y: -100, width: 331.5, height: 155.23 },
-  S: { x: 46.9, y: -100, width: 331.83, height: 162.39 },
+  L: { x: 40, y: -150, width: 331.5, height: 210.84 },
+  N: { x: 40, y: -95, width: 331.5, height: 155.23 },
+  S: { x: 40, y: -100, width: 331.83, height: 162.39 },
 };
 
 const ACCESSORY_LAYOUT = {
-  Glasses: { x: 82, y: 60, width: 278.5, height: 51.55 },
-  Moustache: { x: 140, y: 128, width: 165, height: 59.19 },
-  Bow: { x: 130, y: 196, width: 185, height: 72.78 },
-  Pan: { x: 232, y: 292, width: 170, height: 138.54 },
+  Glasses: { x: 55, y: 90, width: 278.5, height: 51.55 },
+  Moustache: { x: 105, y: 80, width: 165, height: 59.19 },
+  Bow: { x: 110, y: 196, width: 185, height: 72.78 },
+  Pan: { x: 220, y: 250, width: 170, height: 138.54 },
 };
 
 const AVATAR_BASE = "/avatars/";
