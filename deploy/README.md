@@ -5,24 +5,20 @@
 ## สถาปัตยกรรม
 
 ```
-                         ┌──────────────────────────────────────────────┐
- User ── Route 53 (DNS) ─┤                                              │
-   │                     │  1) หน้าเว็บ   : S3 Static Website           │
-   │                     │  2) เกม (WS)   : ALB ─> EC2 (ASG, 2 AZ)      │
-   │                     │  3) Login      : API Gateway ─> Lambda       │
-   │                     └──────────────────────────────────────────────┘
+ User (เบราว์เซอร์) เข้าผ่าน URL ที่ AWS ให้มา ไม่ใช้โดเมนของตัวเอง
    │
-   ├─> S3 (picasso-web)                       หน้าเว็บ React (static)
+   ├─> S3 Static Website (picasso-web)        หน้าเว็บ React       http://<bucket>.s3-website-...
    │
-   ├─> API Gateway (HTTP API) ─> Lambda auth ─> DynamoDB (PicassoUsers)
+   ├─> API Gateway (HTTP API) ─> Lambda auth ─> DynamoDB         https://<api-id>.execute-api...
+   │        Login / Register
    │
-   └─> Internet Gateway ─> ALB (public subnet × 2 AZ)
+   └─> Internet Gateway ─> ALB (public subnet × 2 AZ)            http://<alb>.elb.amazonaws.com
                              │  WebSocket (Socket.IO)
                              ▼
               Auto Scaling Group: EC2 × 2..4 (private subnet × 2 AZ)
                 │            │                  │
                 │            │                  └─> NAT Gateway ─> อินเทอร์เน็ต (ติดตั้งแพ็กเกจ)
-                │            └─> VPC Endpoint ─> S3 (โค้ด server) / DynamoDB
+                │            └─> VPC Endpoint ─> S3 (โค้ด server) / DynamoDB (คะแนน)
                 └─> ElastiCache Redis (private subnet)
                       ห้อง, เกม, lock, pub/sub ข้ามเครื่อง
 
@@ -35,6 +31,7 @@
 - **ElastiCache จำเป็น**: EC2 หลายเครื่องต้องเห็นห้องเดียวกัน และต้องส่ง event ข้ามเครื่อง (A วาดบนเครื่อง 1 -> B บนเครื่อง 2 เห็น) ผ่าน Redis
 - **DynamoDB** เก็บข้อมูลถาวร (บัญชีผู้ใช้)
 - **Lambda แทน Cognito**: สมัคร/เข้าสู่ระบบ ออก token ให้ server เกมตรวจ
+- **ไม่ใช้ Route 53 / โดเมน**: เข้าผ่าน URL ที่ AWS ให้มา (S3 website, ALB DNS name, API Gateway) ไม่มีโดเมนจึงทำ HTTPS ที่ ALB ไม่ได้ (ใบรับรอง ACM ต้องผูกกับโดเมน) หน้าเว็บกับเกมจึงเป็น `http://` / `ws://` ซึ่งใช้งานได้ปกติสำหรับเดโม ส่วน Login เป็น `https://` เพราะ API Gateway มีให้อยู่แล้ว
 
 ระบบทนเครื่องตาย: ถ้าเครื่องหนึ่งดับ (หรือ ASG ปิดเครื่องตอน scale-in) ผู้เล่นจะต่อใหม่ไปเครื่องอื่นแล้วกลับเข้าห้องเดิมได้ เพราะ state อยู่ใน Redis ไม่ได้อยู่ในเครื่อง
 
@@ -75,7 +72,7 @@ VPC Console > **Create VPC** > เลือก **VPC and more**
 
 | ชื่อ | Inbound | ใช้กับ |
 |---|---|---|
-| `picasso-alb-sg` | HTTP 80 (และ HTTPS 443 ถ้ามีโดเมน) จาก `0.0.0.0/0` | ALB |
+| `picasso-alb-sg` | HTTP 80 จาก `0.0.0.0/0` | ALB |
 | `picasso-ec2-sg` | TCP 3000 จาก `picasso-alb-sg` | EC2 |
 | `picasso-redis-sg` | TCP 6379 จาก `picasso-ec2-sg` | ElastiCache |
 
@@ -254,7 +251,6 @@ EC2 > Load Balancers > Create > Application Load Balancer
 
 - Internet-facing, **public subnet ทั้ง 2 AZ**, Security group `picasso-alb-sg`
 - Listener HTTP:80 -> target group ข้างบน
-- (มีโดเมน) Listener HTTPS:443 + certificate จาก ACM
 
 จด **DNS name** ของ ALB (เช่น `picasso-alb-123.ap-southeast-1.elb.amazonaws.com`)
 
@@ -302,18 +298,10 @@ aws autoscaling put-scaling-policy --auto-scaling-group-name picasso-asg --polic
 ```
 (ไม่มี AWS CLI: ไม่ต้องใส่ `-Bucket` แล้วอัปทุกไฟล์ใน `client/dist` ขึ้น bucket ผ่าน Console)
 
-> หน้าเว็บ S3 เป็น `http://` ส่วน Login เป็น `https://` (API Gateway) ใช้ร่วมกันได้
-> ถ้า ALB มี HTTPS แล้ว ใช้ `-SocketUrl https://api.<โดเมน>`
+> หน้าเว็บ S3 และ ALB เป็น `http://` ส่วน Login เป็น `https://` (API Gateway) ใช้ร่วมกันได้
+> `-SocketUrl` ใช้ **DNS name ของ ALB** ตรงๆ (ข้อ 9) ไม่ต้องมีโดเมน
 
-## 12. Route 53 (ถ้ามีโดเมน)
-
-- `api.<โดเมน>` : A record (Alias) -> ALB
-- `auth.<โดเมน>` : Custom domain ของ API Gateway (ไม่บังคับ)
-- หน้าเว็บ: ถ้าจะใช้โดเมนกับ S3 website ชื่อ bucket ต้องตรงกับโดเมน (เช่น bucket `www.example.com`) หรือใช้ CloudFront หน้า S3 (ได้ HTTPS ด้วย)
-
-อย่าลืมเพิ่มโดเมนใหม่ลงใน `CLIENT_URL` (user data) และ CORS ของ API Gateway
-
-## 13. CloudWatch
+## 12. CloudWatch
 
 - **Logs**: log group `/picasso/server` แยก stream ตาม instance
 - **Dashboard** แนะนำ (CloudWatch > Dashboards > Create):
@@ -377,4 +365,6 @@ cd server && npm run auth:dev     # Login (จำลอง Lambda, user เก�
 cd client && npm run dev          # หน้าเว็บ (proxy /socket.io และ /auth ให้เอง)
 ```
 
-ทดสอบหลายเครื่องในเครื่องตัวเอง: เปิด Redis แล้วรัน server 2 ตัวคนละ port ด้วย `REDIS_URL=redis://localhost:6379`
+ทดสอบอัตโนมัติ: `cd server && npm test` (ทดสอบหลายเครื่องด้วย: ตั้ง `TEST_REDIS_URL=redis://localhost:6379` ก่อน)
+
+ลองเล่นหลายเครื่องเอง: เปิด Redis แล้วรัน server 2 ตัวคนละ port ด้วย `REDIS_URL=redis://localhost:6379`
