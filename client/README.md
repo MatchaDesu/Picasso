@@ -1,16 +1,48 @@
-# React + Vite
+# Picasso? — Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+หน้าเว็บของเกมวาดรูปทายคำ (React 19 + Vite + Tailwind CSS) ต่อกับ server ผ่าน Socket.IO และ Login ผ่าน API Gateway + Lambda
 
-Currently, two official plugins are available:
+## รัน (dev)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+ต้องเปิด server เกมและ Login จำลองไว้ก่อน (ดู [README หลัก](../README.md))
 
-## React Compiler
+```bash
+npm install
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+เปิด http://localhost:5173 — Vite proxy ให้เอง:
 
-## Expanding the ESLint configuration
+| path | ส่งต่อไป |
+|---|---|
+| `/socket.io` | server เกม `localhost:3000` |
+| `/auth` | Login จำลอง `localhost:3001` (`lambda/auth/local-server.js`) |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Environment variables
+
+| ตัวแปร | ใช้ทำอะไร | dev |
+|---|---|---|
+| `VITE_SOCKET_URL` | URL ของ server เกม (ALB) | เว้นว่าง (ใช้ proxy) |
+| `VITE_AUTH_API_URL` | URL ของ API Gateway (Login) | เว้นว่าง (ใช้ proxy) |
+
+ค่าถูกฝังลงไฟล์ตอน build — build production ด้วย [`deploy/deploy-client.ps1`](../deploy/deploy-client.ps1) จะใส่ให้เอง (ถ้า build เองแล้วลืมใส่ Vite จะเตือน)
+
+## โครงสร้าง
+
+```
+src/
+├── pages/          หน้าหลัก: Home, CreateRoom, BrowseRoom, WaitingRoom, Game, Result
+├── components/     DrawingBoard, PlayerAvatar, CharacterCustomizer, AuthModal, ...
+├── socket.js       การเชื่อมต่อ Socket.IO + session สำหรับกลับเข้าห้องเดิม
+├── auth.js         Login / Register / token
+├── avatarParts.js  ชิ้นส่วน avatar แมว (SVG ใน public/avatars)
+└── roomSettings.js ค่าเริ่มต้นการตั้งค่าห้อง
+```
+
+## คำสั่ง
+
+```bash
+npm run dev      # dev server
+npm run build    # build ไปที่ dist/
+npm run lint     # ESLint
+```

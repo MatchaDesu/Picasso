@@ -1,11 +1,12 @@
 {
-  "name": "server",
+  "name": "picasso-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Picasso? game server (Node.js + Socket.IO, Redis for auto scaling)",
+  "private": true,
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "node --watch server.js",
     "auth:dev": "node ../lambda/auth/local-server.js",
     "load-test": "node scripts/load-test.js",
     "test": "node --test \"tests/*.test.js\""
@@ -28,7 +29,6 @@
     "socket.io": "^4.8.4"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14",
     "socket.io-client": "^4.8.4"
   }
 }

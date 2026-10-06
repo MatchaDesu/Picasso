@@ -1,5 +1,6 @@
 {
-  "name": "client",
+  "name": "picasso-client",
+  "description": "Picasso? - multiplayer draw & guess game (React + Vite)",
   "private": true,
   "version": "0.0.0",
   "type": "module",
