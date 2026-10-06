@@ -1,6 +1,79 @@
+const {
+    MIXED_CATEGORY,
+    CATEGORY_OPTIONS,
+    isValidCategory,
+} = require("../utils/Words")
+
 const MAX_PLAYERS = 8
 
 const MIN_PLAYERS = 3
+
+const MAX_TITLE_LENGTH = 40
+
+/*
+ * ตัวเลือกการตั้งค่าห้อง
+ *
+ * ส่งให้ client ผ่าน room.settingsOptions
+ * (CreateRoom.jsx มีรายการเวลาวาดของตัวเอง ต้องตรงกับ DRAWING_TIMES)
+ */
+const DRAWING_TIMES = [30, 60, 90, 120]
+
+const ROUND_OPTIONS = [1, 2, 3, 4, 5]
+
+const DEFAULT_SETTINGS = {
+    drawingTime: 60,
+    rounds: 2,
+    category: MIXED_CATEGORY,
+}
+
+const SETTINGS_OPTIONS = {
+    drawingTimes: DRAWING_TIMES,
+    rounds: ROUND_OPTIONS,
+    categories: CATEGORY_OPTIONS,
+}
+
+/*
+ * รวมค่าที่ส่งมากับค่าเดิม
+ * ค่าที่ไม่อยู่ในตัวเลือกจะถูกข้าม (ใช้ค่าเดิม)
+ */
+function sanitizeSettings(
+    input = {},
+    current = DEFAULT_SETTINGS
+) {
+    const drawingTime =
+        Number(input.drawingTime)
+
+    const rounds =
+        Number(input.rounds)
+
+    const category =
+        String(
+            input.category || ""
+        )
+
+    return {
+        drawingTime:
+            DRAWING_TIMES.includes(
+                drawingTime
+            )
+                ? drawingTime
+                : current.drawingTime,
+
+        rounds:
+            ROUND_OPTIONS.includes(
+                rounds
+            )
+                ? rounds
+                : current.rounds,
+
+        category:
+            isValidCategory(
+                category
+            )
+                ? category
+                : current.category,
+    }
+}
 
 class RoomManager {
 
@@ -19,19 +92,22 @@ class RoomManager {
             title:
                 String(
                     settings.title || ""
-                ).trim() ||
+                )
+                    .trim()
+                    .slice(
+                        0,
+                        MAX_TITLE_LENGTH
+                    ) ||
                 "Untitled Room",
 
             hostId: host.id,
 
             status: "waiting",
 
-            settings: {
-                drawingTime:
-                    Number(
-                        settings.drawingTime
-                    ) || 60,
-            },
+            settings:
+                sanitizeSettings(
+                    settings
+                ),
 
             players: new Map(),
         }
@@ -271,6 +347,56 @@ class RoomManager {
         return room
     }
 
+    updateSettings(
+        roomId,
+        playerId,
+        settings
+    ) {
+        const room =
+            this.getRoom(roomId)
+
+        if (!room) {
+            return {
+                success: false,
+                error:
+                    "ROOM_NOT_FOUND",
+            }
+        }
+
+        if (
+            room.hostId !==
+            playerId
+        ) {
+            return {
+                success: false,
+                error:
+                    "ONLY_HOST_CAN_CHANGE_SETTINGS",
+            }
+        }
+
+        if (
+            room.status !==
+            "waiting"
+        ) {
+            return {
+                success: false,
+                error:
+                    "GAME_ALREADY_STARTED",
+            }
+        }
+
+        room.settings =
+            sanitizeSettings(
+                settings,
+                room.settings
+            )
+
+        return {
+            success: true,
+            room,
+        }
+    }
+
     canStart(roomId) {
         const room =
             this.getRoom(roomId)
@@ -334,4 +460,5 @@ module.exports = {
     RoomManager,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    SETTINGS_OPTIONS,
 }

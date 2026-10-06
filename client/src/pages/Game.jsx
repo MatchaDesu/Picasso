@@ -5,7 +5,37 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
 import DrawingBoard from "../components/DrawingBoard";
-import socket from "../socket";
+import socket, {
+  clearSession,
+  isResumeRetrying,
+  resumeSession,
+} from "../socket";
+
+const GUESS_ERROR_MESSAGES = {
+  NOT_DRAWING_PHASE: "Wait for the drawing round.",
+  DRAWER_CANNOT_GUESS: "The artist can't guess.",
+  PLAYER_NOT_IN_GAME: "You are watching this game.",
+  EMPTY_GUESS: "Type a guess first.",
+};
+
+function makeSystemMessage(text) {
+  return {
+    id: `system-${Date.now()}-${Math.random()}`,
+    type: "system",
+    text,
+  };
+}
+
+/*
+ * รวม message ใหม่เข้ากับของเดิม โดยไม่ซ้ำ id
+ */
+function mergeMessages(previous, incoming) {
+  const ids = new Set(previous.map((message) => message.id));
+
+  const added = incoming.filter((message) => message && !ids.has(message.id));
+
+  return added.length ? [...previous, ...added] : previous;
+}
 
 function Game() {
   const location = useLocation();
@@ -20,9 +50,9 @@ function Game() {
   const [guess, setGuess] = useState("");
   const [guessMessage, setGuessMessage] = useState("");
   const [chatMessages, setChatMessages] = useState([]);
-  const [guessedPlayers, setGuessedPlayers] = useState(new Set());
-  const [timeLeft, setTimeLeft] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const [connected, setConnected] = useState(socket.connected);
+  const [turnId, setTurnId] = useState(null);
 
   const roomRef = useRef(initialRoom);
   const gameStateRef = useRef(null);
@@ -72,6 +102,27 @@ function Game() {
   const totalRounds = gameState?.totalRounds || 0;
   const currentRound = gameState?.round || 1;
 
+  const guessedPlayers = useMemo(
+    () => new Set(gameState?.guessedPlayers || []),
+    [gameState?.guessedPlayers],
+  );
+
+  /*
+   * --------------------------------------------------
+   * Reset UI when NEW TURN starts
+   *
+   * ใช้ turnId จาก server (ไม่เปลี่ยนตอน reconnect)
+   * และปรับ state ระหว่าง render แทน useEffect
+   * --------------------------------------------------
+   */
+
+  if (gameState?.turnId !== undefined && gameState.turnId !== turnId) {
+    setTurnId(gameState.turnId);
+    setGuessMessage("");
+    setChatMessages([]);
+    setDrawerWord("");
+  }
+
   /*
    * --------------------------------------------------
    * Word hint
@@ -112,29 +163,25 @@ function Game() {
    * --------------------------------------------------
    */
 
+  const phaseEndsAt = gameState?.phaseEndsAt || 0;
+
+  const timeLeft = phaseEndsAt
+    ? Math.max(0, Math.ceil((phaseEndsAt - now) / 1000))
+    : 0;
+
   useEffect(() => {
-    if (!gameState?.phaseEndsAt) {
-      setTimeLeft(0);
+    if (!phaseEndsAt) {
       return;
     }
 
-    function updateTimer() {
-      const remaining = Math.max(
-        0,
-        Math.ceil((gameState.phaseEndsAt - Date.now()) / 1000),
-      );
-
-      setTimeLeft(remaining);
-    }
-
-    updateTimer();
-
-    const timer = setInterval(updateTimer, 250);
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 250);
 
     return () => {
       clearInterval(timer);
     };
-  }, [gameState?.phaseEndsAt]);
+  }, [phaseEndsAt]);
 
   /*
    * --------------------------------------------------
@@ -157,7 +204,42 @@ function Game() {
 
     function handleConnect() {
       setConnected(true);
-      requestGameState();
+
+      // socket ใหม่ (refresh / หลุด) ต้อง resume ก่อน
+      // server จะส่ง game state มาให้เองหลัง resume สำเร็จ
+      if (!resumeSession()) {
+        requestGameState();
+      }
+    }
+
+    function handleRoomResumed(resumedRoom) {
+      if (!resumedRoom) {
+        return;
+      }
+
+      // เกมจบไปแล้วระหว่างที่หลุด -> กลับห้องรอ
+      if (resumedRoom.status === "waiting") {
+        navigate("/waiting-room", {
+          replace: true,
+          state: {
+            room: resumedRoom,
+          },
+        });
+
+        return;
+      }
+
+      roomRef.current = resumedRoom;
+      setRoom(resumedRoom);
+    }
+
+    function handleResumeFailed() {
+      if (isResumeRetrying()) {
+        return;
+      }
+
+      clearSession();
+      navigate("/", { replace: true });
     }
 
     /*
@@ -200,9 +282,6 @@ function Game() {
         setRoom(state.room);
       }
 
-      if (Array.isArray(state.guessedPlayerIds)) {
-        setGuessedPlayers(new Set(state.guessedPlayerIds));
-      }
     }
 
     /*
@@ -223,6 +302,8 @@ function Game() {
 
       resultNavigatedRef.current = true;
 
+      // ไม่ clear session: ยังอยู่ในห้องเดิม กลับไปเล่นรอบใหม่ได้
+
       const finalPlayers = Array.isArray(data?.players) ? data.players : [];
 
       const finalScores = data?.scores || {};
@@ -232,6 +313,7 @@ function Game() {
         state: {
           players: finalPlayers,
           scores: finalScores,
+          room: data?.room || roomRef.current,
         },
       });
     }
@@ -285,24 +367,20 @@ function Game() {
 
       if (result.correct) {
         setGuessMessage(`✓ Correct! +${result.points || 0} pts`);
+        return;
+      }
 
-        if (result.playerId) {
-          setGuessedPlayers((previous) => {
-            const next = new Set(previous);
-            next.add(result.playerId);
-            return next;
-          });
-        }
-
+      if (result.alreadyGuessed) {
+        setGuessMessage("You already guessed the word.");
         return;
       }
 
       if (result.error) {
-        setGuessMessage(result.error);
+        setGuessMessage(GUESS_ERROR_MESSAGES[result.error] || result.error);
         return;
       }
 
-      setGuessMessage(result.message || "Wrong guess.");
+      setGuessMessage("Wrong guess.");
     }
 
     /*
@@ -314,26 +392,15 @@ function Game() {
         return;
       }
 
-      if (data.playerId) {
-        setGuessedPlayers((previous) => {
-          const next = new Set(previous);
+      const message = data.message || {
+        id: `${Date.now()}-${data.playerId}`,
+        type: "correct",
+        playerId: data.playerId,
+        playerName: data.playerName || "Player",
+        points: data.points || 0,
+      };
 
-          next.add(data.playerId);
-
-          return next;
-        });
-      }
-
-      setChatMessages((previous) => [
-        ...previous,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          type: "correct",
-          playerName: data.playerName || "Player",
-          points: data.points || 0,
-          text: "guessed the word!",
-        },
-      ]);
+      setChatMessages((previous) => mergeMessages(previous, [message]));
     }
 
     /*
@@ -345,15 +412,19 @@ function Game() {
         return;
       }
 
-      setChatMessages((previous) => [
-        ...previous,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          type: message.type || "wrong",
-          playerName: message.playerName || "Player",
-          text: message.text || "",
-        },
-      ]);
+      setChatMessages((previous) => mergeMessages(previous, [message]));
+    }
+
+    /*
+     * Guess history (ตอนโหลดหน้า / reconnect)
+     */
+
+    function handleGuessHistory(history) {
+      if (!Array.isArray(history)) {
+        return;
+      }
+
+      setChatMessages((previous) => mergeMessages(previous, history));
     }
 
     /*
@@ -380,11 +451,23 @@ function Game() {
 
       setChatMessages((previous) => [
         ...previous,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          type: "system",
-          text: `${data.playerName || "A player"} left the game.`,
-        },
+        makeSystemMessage(`${data.playerName || "A player"} disconnected.`),
+      ]);
+    }
+
+    function handlePlayerLeft(data) {
+      setChatMessages((previous) => [
+        ...previous,
+        makeSystemMessage(`${data?.playerName || "A player"} left the game.`),
+      ]);
+    }
+
+    function handlePlayerReconnected(data) {
+      setChatMessages((previous) => [
+        ...previous,
+        makeSystemMessage(
+          `${data?.player?.name || "A player"} reconnected.`,
+        ),
       ]);
     }
 
@@ -418,8 +501,18 @@ function Game() {
 
     socket.on("playerDisconnected", handlePlayerDisconnected);
 
+    socket.on("playerLeft", handlePlayerLeft);
+
+    socket.on("playerReconnected", handlePlayerReconnected);
+
+    socket.on("guessHistory", handleGuessHistory);
+
+    socket.on("roomResumed", handleRoomResumed);
+
+    socket.on("resumeFailed", handleResumeFailed);
+
     if (socket.connected) {
-      requestGameState();
+      handleConnect();
     }
 
     /*
@@ -452,25 +545,18 @@ function Game() {
       socket.off("gameError", handleGameError);
 
       socket.off("playerDisconnected", handlePlayerDisconnected);
+
+      socket.off("playerLeft", handlePlayerLeft);
+
+      socket.off("playerReconnected", handlePlayerReconnected);
+
+      socket.off("guessHistory", handleGuessHistory);
+
+      socket.off("roomResumed", handleRoomResumed);
+
+      socket.off("resumeFailed", handleResumeFailed);
     };
   }, [navigate]);
-
-  /*
-   * --------------------------------------------------
-   * Reset UI when NEW TURN starts
-   * --------------------------------------------------
-   */
-
-  useEffect(() => {
-    if (!gameState?.round) {
-      return;
-    }
-
-    setGuessedPlayers(new Set());
-    setGuessMessage("");
-    setChatMessages([]);
-    setDrawerWord("");
-  }, [gameState?.round, gameState?.drawerId]);
 
   /*
    * --------------------------------------------------
@@ -514,6 +600,7 @@ function Game() {
 
   function handleLeave() {
     socket.emit("leaveRoom");
+    clearSession();
     navigate("/");
   }
 
@@ -639,6 +726,12 @@ function Game() {
               Round {currentRound}{" "}
               <span className="text-lg text-[#666666]">of {totalRounds}</span>
             </p>
+
+            {gameState?.turnsPerRound > 0 && (
+              <p className="text-xs text-[#666666]">
+                Artist {gameState.turn} of {gameState.turnsPerRound}
+              </p>
+            )}
           </div>
         </div>
 
@@ -929,6 +1022,12 @@ function Game() {
                   🐾
                 </button>
               </div>
+
+              {guessMessage && (
+                <p className="px-2 text-center text-xs font-semibold text-[#666666]">
+                  {guessMessage}
+                </p>
+              )}
             </form>
           ) : (
             <div className="rounded-2xl bg-[#d4d4d4] px-4 py-4 text-center text-sm font-semibold text-[#666666]">

@@ -1,38 +1,19 @@
-const WORDS = [
-    "cat",
-    "dog",
-    "pizza",
-    "apple",
-    "car",
-    "house",
-    "tree",
-    "sun",
-    "moon",
-    "fish",
-    "flower",
-    "book",
-    "phone",
-    "computer",
-    "guitar",
-    "cake",
-    "ice cream",
-    "banana",
-    "airplane",
-    "robot",
-    "star",
-    "cloud",
-    "rainbow",
-    "coffee",
-    "hamburger",
-    "camera",
-    "chair",
-    "table",
-    "school",
-    "castle",
-]
+const {
+    MIXED_CATEGORY,
+    getWordsForCategory,
+} = require("../utils/Words")
 
 const CHOOSE_WORD_TIME = 15
-const HINT_DELAY = 10
+
+/*
+ * คะแนนที่คนวาดได้ ต่อ 1 คนที่ทายถูก
+ */
+const DRAWER_POINTS_PER_GUESS = 100
+
+const MAX_GUESS_LENGTH = 100
+const MAX_STROKES_PER_TURN = 20000
+const MAX_POINTS_PER_STROKE = 50
+const MAX_BRUSH_SIZE = 50
 
 class GameManager {
     constructor() {
@@ -42,7 +23,7 @@ class GameManager {
     createGame(
         roomId,
         players,
-        drawingTime = 60,
+        settings = {},
         onPhaseChange = null,
         onTurnStart = null
     ) {
@@ -61,12 +42,32 @@ class GameManager {
             playerIds,
             scores,
 
-            drawingTime,
+            drawingTime:
+                settings.drawingTime || 60,
+
+            category:
+                settings.category ||
+                MIXED_CATEGORY,
+
+            /*
+             * คำที่ใช้ไปแล้วในเกมนี้ (กันคำซ้ำ)
+             */
+            usedWords: new Set(),
 
             phase: "choose-word",
 
+            /*
+             * 1 round = ผู้เล่นทุกคนได้วาดคนละ 1 ครั้ง
+             */
             round: 1,
-            totalRounds: playerIds.length,
+            totalRounds:
+                settings.rounds || 1,
+
+            /*
+             * turnId เพิ่มขึ้นทุกครั้งที่เริ่ม turn ใหม่
+             * client ใช้ reset UI (chat / คำตอบ)
+             */
+            turnId: 0,
 
             turnIndex: 0,
             drawerId: playerIds[0],
@@ -82,6 +83,7 @@ class GameManager {
             hint: "",
             revealedIndexes: new Set(),
             hintRevealed: false,
+            maxHints: 0,
 
             strokes: [],
 
@@ -135,10 +137,15 @@ class GameManager {
 
         this.clearTimers(game)
 
+        game.turnId += 1
+
         game.phase = "choose-word"
 
         game.word = ""
-        game.wordOptions = this.getRandomWords(3)
+        game.wordOptions = this.getRandomWords(
+            game,
+            3
+        )
 
         game.guessedPlayers = new Set()
         game.guessMessages = []
@@ -176,16 +183,59 @@ class GameManager {
         }, CHOOSE_WORD_TIME * 1000)
     }
 
-    getRandomWords(count) {
-        const shuffled = [
-            ...WORDS,
-        ].sort(
-            () =>
-                Math.random() -
-                0.5
-        )
+    getRandomWords(
+        game,
+        count
+    ) {
+        const words =
+            getWordsForCategory(
+                game.category
+            )
 
-        return shuffled.slice(
+        let available =
+            words.filter(
+                (word) =>
+                    !game.usedWords.has(
+                        word
+                    )
+            )
+
+        /*
+         * คำในหมวดใช้หมดแล้ว เริ่มวนใหม่
+         */
+        if (
+            available.length <
+            count
+        ) {
+            game.usedWords.clear()
+
+            available = [...words]
+        }
+
+        /*
+         * Fisher-Yates shuffle
+         */
+        for (
+            let index = available.length - 1;
+            index > 0;
+            index--
+        ) {
+            const swapIndex =
+                Math.floor(
+                    Math.random() *
+                    (index + 1)
+                )
+
+            ;[
+                available[index],
+                available[swapIndex],
+            ] = [
+                available[swapIndex],
+                available[index],
+            ]
+        }
+
+        return available.slice(
             0,
             count
         )
@@ -240,6 +290,15 @@ class GameManager {
         this.clearTimers(game)
 
         game.word = word
+
+        game.usedWords.add(
+            word
+        )
+
+        game.maxHints =
+            this.getMaxHints(
+                word
+            )
 
         game.phase =
             "draw-and-guess"
@@ -438,7 +497,28 @@ class GameManager {
             clearTimeout(
                 game.hintTimer
             )
+
+            game.hintTimer = null
         }
+
+        /*
+         * เปิด hint ครบตามจำนวนที่กำหนดแล้ว
+         * ไม่เปิดเพิ่ม (กันคำตอบโผล่ทั้งคำ)
+         */
+        if (
+            game.revealedIndexes.size >=
+            game.maxHints
+        ) {
+            return
+        }
+
+        /*
+         * กระจาย hint เท่าๆ กันตลอดเวลาวาด
+         * เช่น เวลา 60s, hint 2 ตัว -> เปิดที่ 20s และ 40s
+         */
+        const hintDelay =
+            (game.drawingTime * 1000) /
+            (game.maxHints + 1)
 
         game.hintTimer =
             setTimeout(() => {
@@ -477,7 +557,47 @@ class GameManager {
                 this.scheduleNextHint(
                     game
                 )
-            }, HINT_DELAY * 1000)
+            }, hintDelay)
+    }
+
+    /*
+     * จำนวนตัวอักษรสูงสุดที่ hint จะเปิดให้
+     *
+     * ไม่เกินครึ่งคำ และต้องเหลือซ่อนอย่างน้อย 1 ตัวเสมอ
+     * เช่น cat -> 1, pizza -> 2, ice cream -> 4
+     */
+    getMaxHints(word) {
+        const letters =
+            word.replace(
+                /\s/g,
+                ""
+            ).length
+
+        return Math.max(
+            0,
+            Math.min(
+                Math.floor(
+                    letters / 2
+                ),
+                letters - 1
+            )
+        )
+    }
+
+    /*
+     * ตัดช่องว่างหัวท้าย / ช่องว่างซ้ำ และไม่สนตัวพิมพ์ใหญ่เล็ก
+     * "  Ice   Cream " -> "ice cream"
+     */
+    normalizeGuess(text) {
+        return String(
+            text || ""
+        )
+            .trim()
+            .replace(
+                /\s+/g,
+                " "
+            )
+            .toLowerCase()
     }
 
     submitGuess(
@@ -526,75 +646,69 @@ class GameManager {
             }
         }
 
-        const normalizedGuess =
+        const rawGuess =
             String(
                 guess || ""
             )
                 .trim()
-                .toLowerCase()
+                .replace(
+                    /\s+/g,
+                    " "
+                )
+                .slice(
+                    0,
+                    MAX_GUESS_LENGTH
+                )
 
-        const normalizedWord =
-            String(
-                game.word
-            )
-                .trim()
-                .toLowerCase()
+        if (!rawGuess) {
+            return {
+                success: false,
+                error: "EMPTY_GUESS",
+            }
+        }
 
-        const correct =
-            normalizedGuess ===
-            normalizedWord
-
-        const player =
-            game.playerIds.includes(
+        if (
+            !game.playerIds.includes(
                 playerId
             )
-
-        if (!player) {
+        ) {
             return {
                 success: false,
                 error: "PLAYER_NOT_IN_GAME",
             }
         }
 
+        const correct =
+            this.normalizeGuess(
+                rawGuess
+            ) ===
+            this.normalizeGuess(
+                game.word
+            )
+
         if (!correct) {
+            const message = {
+                playerId,
+                guess: rawGuess,
+                correct: false,
+                timestamp:
+                    Date.now(),
+            }
+
             game.guessMessages.push(
-                {
-                    playerId,
-                    guess:
-                        String(
-                            guess || ""
-                        ),
-                    correct: false,
-                    timestamp:
-                        Date.now(),
-                }
+                message
             )
 
             return {
                 success: true,
                 correct: false,
+                message,
             }
         }
 
         game.guessedPlayers.add(
             playerId
         )
-
-        const remainingPlayers =
-            game.playerIds.filter(
-                (id) =>
-                    id !==
-                    game.drawerId
-            )
-
-        const guessedCount =
-            game.guessedPlayers.size
-
-        const allGuessed =
-            remainingPlayers.length >
-            0 &&
-            guessedCount >=
-            remainingPlayers.length
 
         const points =
             this.calculateGuessPoints(
@@ -604,25 +718,66 @@ class GameManager {
         game.scores[playerId] +=
             points
 
+        /*
+         * คนวาดได้คะแนนทุกครั้งที่มีคนทายถูก
+         */
+        if (
+            Object.prototype.hasOwnProperty.call(
+                game.scores,
+                game.drawerId
+            )
+        ) {
+            game.scores[game.drawerId] +=
+                DRAWER_POINTS_PER_GUESS
+        }
+
+        /*
+         * ไม่เก็บคำตอบที่ถูกไว้ใน message
+         * กันคำตอบรั่วไปถึงผู้เล่นคนอื่น
+         */
+        const message = {
+            playerId,
+            correct: true,
+            points,
+            timestamp:
+                Date.now(),
+        }
+
         game.guessMessages.push(
-            {
-                playerId,
-                guess:
-                    String(
-                        guess || ""
-                    ),
-                correct: true,
-                timestamp:
-                    Date.now(),
-            }
+            message
         )
 
         return {
             success: true,
             correct: true,
+            message,
             points,
-            allGuessed,
+            drawerPoints:
+                DRAWER_POINTS_PER_GUESS,
+            allGuessed:
+                this.haveAllGuessed(
+                    game
+                ),
         }
+    }
+
+    haveAllGuessed(game) {
+        const guessers =
+            game.playerIds.filter(
+                (id) =>
+                    id !==
+                    game.drawerId
+            )
+
+        return (
+            guessers.length > 0 &&
+            guessers.every(
+                (id) =>
+                    game.guessedPlayers.has(
+                        id
+                    )
+            )
+        )
     }
 
     calculateGuessPoints(game) {
@@ -678,20 +833,105 @@ class GameManager {
             }
         }
 
-        if (!stroke) {
+        const sanitizedStroke =
+            this.sanitizeStroke(
+                stroke
+            )
+
+        if (!sanitizedStroke) {
             return {
                 success: false,
                 error: "INVALID_STROKE",
             }
         }
 
+        if (
+            game.strokes.length >=
+            MAX_STROKES_PER_TURN
+        ) {
+            return {
+                success: false,
+                error: "TOO_MANY_STROKES",
+            }
+        }
+
         game.strokes.push(
-            stroke
+            sanitizedStroke
         )
 
         return {
             success: true,
-            stroke,
+            stroke: sanitizedStroke,
+        }
+    }
+
+    sanitizeStroke(stroke) {
+        if (
+            !stroke ||
+            !Array.isArray(
+                stroke.points
+            ) ||
+            stroke.points.length < 2 ||
+            stroke.points.length >
+            MAX_POINTS_PER_STROKE
+        ) {
+            return null
+        }
+
+        const points = []
+
+        for (const point of stroke.points) {
+            const x = Number(point?.x)
+            const y = Number(point?.y)
+
+            if (
+                !Number.isFinite(x) ||
+                !Number.isFinite(y)
+            ) {
+                return null
+            }
+
+            points.push({
+                x: Math.min(1, Math.max(0, x)),
+                y: Math.min(1, Math.max(0, y)),
+            })
+        }
+
+        const color =
+            String(
+                stroke.color || ""
+            )
+
+        if (
+            !/^#[0-9a-fA-F]{6}$/.test(
+                color
+            )
+        ) {
+            return null
+        }
+
+        const size =
+            Number(stroke.size)
+
+        if (
+            !Number.isFinite(size)
+        ) {
+            return null
+        }
+
+        return {
+            points,
+            color,
+            size:
+                Math.min(
+                    MAX_BRUSH_SIZE,
+                    Math.max(1, size)
+                ),
+            mode:
+                stroke.mode ===
+                "erase"
+                    ? "erase"
+                    : "draw",
         }
     }
 
@@ -743,45 +983,59 @@ class GameManager {
 
         this.clearTimers(game)
 
-        const nextTurnIndex =
+        this.startTurnAt(
+            game,
             game.turnIndex + 1
+        )
+    }
 
-        /*
-         * ยังมี player คนต่อไป
-         */
+    /*
+     * เริ่ม turn ของผู้เล่นลำดับ turnIndex
+     *
+     * ถ้าเลยคนสุดท้ายแล้ว -> ขึ้น round ใหม่
+     * ถ้าครบทุก round แล้ว -> จบเกม
+     */
+    startTurnAt(
+        game,
+        turnIndex
+    ) {
         if (
-            nextTurnIndex <
+            turnIndex >=
             game.playerIds.length
         ) {
-            game.turnIndex =
-                nextTurnIndex
+            turnIndex = 0
 
-            game.drawerId =
-                game.playerIds[
-                game.turnIndex
-                ]
+            game.round += 1
+        }
 
-            /*
-             * ถ้าครบทุกคนแล้ว
-             * ขึ้น round ใหม่
-             */
-            if (
-                game.turnIndex ===
-                0
-            ) {
-                game.round += 1
-            }
+        if (
+            game.round >
+            game.totalRounds
+        ) {
+            game.round =
+                game.totalRounds
 
-            this.startChooseWord(
-                game
-            )
+            this.endGame(game)
 
             return
         }
 
-        /*
-         * จบเกม
-         */
+        game.turnIndex =
+            turnIndex
+
+        game.drawerId =
+            game.playerIds[
+            game.turnIndex
+            ]
+
+        this.startChooseWord(
+            game
+        )
+    }
+
+    endGame(game) {
+        this.clearTimers(game)
+
         game.phase =
             "game-result"
 
@@ -827,6 +1081,10 @@ class GameManager {
             }
         }
 
+        const wasDrawer =
+            game.drawerId ===
+            playerId
+
         /*
          * เอา player ออกจาก game
          */
@@ -861,42 +1119,12 @@ class GameManager {
         }
 
         /*
-         * เหลือผู้เล่นเพียง 1 คน
-         *
-         * จบเกมทันที
-         *
-         * ไม่ให้เริ่ม choose-word รอบใหม่
+         * เกมจบไปแล้ว ไม่ต้องทำอะไรต่อ
          */
         if (
-            game.playerIds.length ===
-            1
+            game.phase ===
+            "game-result"
         ) {
-            this.clearTimers(
-                game
-            )
-
-            game.phase =
-                "game-result"
-
-            game.word = ""
-
-            game.wordOptions = []
-
-            game.phaseEndsAt = 0
-
-            game.hint = ""
-
-            game.revealedIndexes =
-                new Set()
-
-            game.hintRevealed =
-                false
-
-            game.strokes = []
-
-            game.totalRounds =
-                game.playerIds.length
-
             return {
                 changed: true,
                 game,
@@ -904,31 +1132,37 @@ class GameManager {
         }
 
         /*
-         * ถ้า Drawer ออก
+         * เหลือผู้เล่นเพียง 1 คน
+         *
+         * จบเกมทันที
          */
         if (
-            game.drawerId ===
-            playerId
+            game.playerIds.length ===
+            1
         ) {
-            game.turnIndex =
-                game.turnIndex %
-                game.playerIds.length
+            this.endGame(game)
 
-            game.drawerId =
-                game.playerIds[
-                game.turnIndex
-                ]
-
-            if (
-                game.phase ===
-                "draw-and-guess"
-            ) {
-                this.startChooseWord(
-                    game
-                )
+            return {
+                changed: true,
+                game,
             }
-        } else {
+        }
 
+        if (wasDrawer) {
+            /*
+             * หลัง splice คนถัดไปจะเลื่อนมาอยู่ที่
+             * turnIndex เดิมพอดี
+             *
+             * startTurnAt จัดการขึ้น round ใหม่ / จบเกม ให้
+             * และเริ่ม choose-word ใหม่ ให้ drawer คนใหม่ได้เวลาเต็ม
+             */
+            this.clearTimers(game)
+
+            this.startTurnAt(
+                game,
+                game.turnIndex
+            )
+        } else {
             /*
              * ถ้า player ที่ออก
              * อยู่ก่อน drawer
@@ -940,14 +1174,19 @@ class GameManager {
                 game.turnIndex -= 1
             }
 
-            game.turnIndex =
-                Math.max(
-                    0,
-                    game.turnIndex
+            /*
+             * คนที่เหลือทายถูกครบแล้ว
+             * จบ turn เลย ไม่ต้องรอหมดเวลา
+             */
+            if (
+                game.phase ===
+                "draw-and-guess" &&
+                this.haveAllGuessed(
+                    game
                 )
-
-            game.totalRounds =
-                game.playerIds.length
+            ) {
+                this.finishTurn(game)
+            }
         }
 
         return {
@@ -1026,11 +1265,23 @@ class GameManager {
             phase:
                 game.phase,
 
+            turnId:
+                game.turnId,
+
             round:
                 game.round,
 
             totalRounds:
                 game.totalRounds,
+
+            /*
+             * ลำดับคนวาดใน round นี้ เช่น 2 / 4
+             */
+            turn:
+                game.turnIndex + 1,
+
+            turnsPerRound:
+                game.playerIds.length,
 
             drawerId:
                 game.drawerId,
@@ -1044,13 +1295,16 @@ class GameManager {
             scores:
                 game.scores,
 
+            wordLength:
+                game.word.replace(
+                    / /g,
+                    ""
+                ).length,
+
             guessedPlayers:
                 Array.from(
                     game.guessedPlayers
                 ),
-
-            guessMessages:
-                game.guessMessages,
         }
     }
 }

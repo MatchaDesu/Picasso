@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import socket from "../socket";
+import socket, { saveSession } from "../socket";
 
 function BrowseRoom() {
   const navigate = useNavigate();
@@ -35,9 +35,11 @@ function BrowseRoom() {
     }
 
     function handleRoomJoined(room) {
-      sessionStorage.setItem("picassoRoomId", room.id);
-
-      sessionStorage.setItem("picassoPlayerId", socket.id);
+      saveSession({
+        roomId: room.id,
+        playerId: socket.id,
+        resumeToken: room.resumeToken,
+      });
 
       navigate("/waiting-room", {
         state: {

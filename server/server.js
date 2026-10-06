@@ -1,3 +1,13 @@
+/*
+ * โหลด .env (Node >= 20.12)
+ * ไม่มีไฟล์ก็ข้ามไป ใช้ค่า default
+ */
+try {
+  process.loadEnvFile()
+} catch {
+  // no .env file
+}
+
 const express = require("express")
 const cors = require("cors")
 const http = require("http")
@@ -13,9 +23,17 @@ const app =
 const server =
   http.createServer(app)
 
-const clientUrl =
+/*
+ * CLIENT_URL ใส่ได้หลาย origin คั่นด้วย comma
+ * เช่น http://localhost:5173,https://xxx.ngrok-free.dev
+ */
+const clientUrl = (
   process.env.CLIENT_URL ||
   "http://localhost:5173"
+)
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean)
 
 app.use(
   cors({
@@ -55,11 +73,8 @@ registerSocketHandlers(io)
 const PORT =
   process.env.PORT || 3000
 
-server.listen(
-  PORT,
-  () => {
+server.listen(PORT,() => {
     console.log(
       `Server running on port ${PORT}`
-    )
-  }
+    )}
 )

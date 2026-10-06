@@ -1,5 +1,8 @@
+const crypto = require("crypto")
+
 const {
     RoomManager,
+    SETTINGS_OPTIONS,
 } = require("../managers/RoomManager")
 
 const {
@@ -31,6 +34,11 @@ const RECONNECT_GRACE_TIME =
 const reconnectTimers =
     new Map()
 
+const ROOM_ID_PATTERN =
+    /^[A-Z0-9]{4,12}$/
+
+const MAX_AVATAR_FIELD_LENGTH = 50
+
 const DEFAULT_AVATAR = {
     furColor: "#e06a3b",
     earStyle: "Classic",
@@ -51,18 +59,27 @@ function sanitizeAvatar(
             String(
                 avatar.furColor ||
                 DEFAULT_AVATAR.furColor
+            ).slice(
+                0,
+                MAX_AVATAR_FIELD_LENGTH
             ),
 
         earStyle:
             String(
                 avatar.earStyle ||
                 DEFAULT_AVATAR.earStyle
+            ).slice(
+                0,
+                MAX_AVATAR_FIELD_LENGTH
             ),
 
         costume:
             String(
                 avatar.costume ||
                 DEFAULT_AVATAR.costume
+            ).slice(
+                0,
+                MAX_AVATAR_FIELD_LENGTH
             ),
     }
 }
@@ -116,7 +133,18 @@ function serializeRoom(
             drawingTime:
                 room.settings
                     .drawingTime,
+
+            rounds:
+                room.settings
+                    .rounds,
+
+            category:
+                room.settings
+                    .category,
         },
+
+        settingsOptions:
+            SETTINGS_OPTIONS,
 
         players:
             Array.from(
@@ -158,6 +186,73 @@ function emitRoomUpdate(
     )
 }
 
+function getPlayerName(
+    roomId,
+    playerId
+) {
+    const room =
+        roomManager.getRoom(
+            roomId
+        )
+
+    return (
+        room?.players.get(
+            playerId
+        )?.name ||
+        "Player"
+    )
+}
+
+/*
+ * แปลง guess message เป็นรูปแบบที่ส่งให้ client ได้
+ *
+ * คำตอบที่ถูกจะไม่มี text
+ * กันคำตอบรั่วไปถึงคนที่ยังทายไม่ถูก
+ */
+function toPublicGuessMessage(
+    roomId,
+    message
+) {
+    return {
+        id:
+            `${message.timestamp}-${message.playerId}`,
+
+        type:
+            message.correct
+                ? "correct"
+                : "wrong",
+
+        playerId:
+            message.playerId,
+
+        playerName:
+            getPlayerName(
+                roomId,
+                message.playerId
+            ),
+
+        text:
+            message.correct
+                ? ""
+                : message.guess,
+
+        points:
+            message.points || 0,
+    }
+}
+
+function serializeGuessHistory(
+    game
+) {
+    return game.guessMessages.map(
+        (message) =>
+            toPublicGuessMessage(
+                game.roomId,
+                message
+            )
+    )
+}
+
 function emitPlayerProfile(
     socket
 ) {
@@ -187,7 +282,11 @@ function emitPlayerProfile(
 |--------------------------------------------------------------------------
 */
 
-function finishGameAndCloseRoom(io, game) {
+/*
+ * จบเกมแล้วพาทุกคนกลับห้องรอ (ไม่ลบห้อง)
+ * host กดเริ่มรอบใหม่ได้ และคนใหม่เข้าห้องได้อีกครั้ง
+ */
+function finishGameAndReturnToRoom(io, game) {
     if (!game) {
         return
     }
@@ -204,13 +303,17 @@ function finishGameAndCloseRoom(io, game) {
     const room = roomManager.getRoom(roomId)
 
     /*
-     * เก็บข้อมูลผู้เล่นไว้ก่อนลบ room
+     * รวมคนที่หลุดชั่วคราวด้วย
+     * จะได้ไม่หายจากหน้าผลลัพธ์
      */
     const players = room
         ? Array.from(room.players.values())
             .filter(
                 (player) =>
-                    !player.disconnected
+                    Object.prototype.hasOwnProperty.call(
+                        game.scores,
+                        player.id
+                    )
             )
             .map(serializePlayer)
         : []
@@ -219,59 +322,36 @@ function finishGameAndCloseRoom(io, game) {
         ...game.scores,
     }
 
-    /*
-     * หา socket ของผู้เล่นทั้งหมด
-     * ก่อนเอาออกจาก room
-     */
-    const roomSockets = io.sockets.adapter.rooms.get(roomId)
+    gameManager.deleteGame(roomId)
 
-    const sockets = roomSockets
-        ? Array.from(roomSockets)
-            .map(
-                (socketId) =>
-                    io.sockets.sockets.get(socketId)
-            )
-            .filter(Boolean)
-        : []
+    if (!room) {
+        return
+    }
 
-    /*
-     * ส่งผลลัพธ์ให้ทุกคนก่อน
-     * ลบ room
-     */
+    room.status = "waiting"
+
     io.to(roomId).emit(
         "gameFinished",
         {
             players,
             scores,
+            room:
+                serializeRoom(room),
         }
     )
 
-    /*
-     * ลบ Game
-     */
-    gameManager.deleteGame(roomId)
+    emitRoomUpdate(
+        io,
+        room
+    )
 
     /*
-     * ลบ Room
-     */
-    roomManager.deleteRoom(roomId)
-
-    /*
-     * เอาผู้เล่นทุกคนออกจาก Socket.IO room
-     */
-    for (const playerSocket of sockets) {
-        playerSocket.leave(roomId)
-
-        playerSocket.data.roomId = null
-    }
-
-    /*
-     * แจ้ง lobby ว่า room หายแล้ว
+     * แจ้ง lobby ว่าห้องกลับมาเข้าได้แล้ว
      */
     io.emit("roomListChanged")
 
     console.log(
-        `Game finished and room ${roomId} was deleted.`
+        `Game finished in room ${roomId}. Back to waiting room.`
     )
 }
 
@@ -365,7 +445,9 @@ function emitGameState(
             game.roomId
         ).emit(
             "guessHistory",
-            game.guessMessages
+            serializeGuessHistory(
+                game
+            )
         )
 
         return
@@ -379,7 +461,7 @@ function emitGameState(
         game.phase ===
         "game-result"
     ) {
-        finishGameAndCloseRoom(
+        finishGameAndReturnToRoom(
             io,
             game
         )
@@ -473,7 +555,9 @@ function emitCurrentGameStateToSocket(
 
         socket.emit(
             "guessHistory",
-            game.guessMessages
+            serializeGuessHistory(
+                game
+            )
         )
     }
 }
@@ -589,8 +673,7 @@ function startGame(
         gameManager.createGame(
             roomId,
             players,
-            room.settings
-                .drawingTime,
+            room.settings,
 
             /*
              * onPhaseChange
@@ -668,6 +751,13 @@ function createPlayerFromSocket(
         disconnected: false,
 
         disconnectedAt: null,
+
+        /*
+         * ใช้ยืนยันตัวตนตอน resumeRoom
+         * ห้ามส่งให้ผู้เล่นคนอื่น (serializePlayer ไม่ส่ง)
+         */
+        resumeToken:
+            crypto.randomUUID(),
     }
 }
 
@@ -737,7 +827,7 @@ function cleanupDisconnectedPlayer(
     /*
      * เอาออกจาก Room
      *
-     * ต้องเกิดก่อน finishGameAndCloseRoom()
+     * ต้องเกิดก่อน finishGameAndReturnToRoom()
      */
     const updatedRoom =
         roomManager.removePlayer(
@@ -769,10 +859,13 @@ function cleanupDisconnectedPlayer(
     io.to(
         roomId
     ).emit(
-        "playerDisconnected",
+        "playerLeft",
         {
             playerId:
                 oldPlayerId,
+
+            playerName:
+                player.name,
         }
     )
 
@@ -788,7 +881,7 @@ function cleanupDisconnectedPlayer(
             gameResult.game.phase ===
             "game-result"
         ) {
-            finishGameAndCloseRoom(
+            finishGameAndReturnToRoom(
                 io,
                 gameResult.game
             )
@@ -834,10 +927,46 @@ function handleDisconnect(
         return
     }
 
+    const player =
+        room.players.get(
+            socket.id
+        )
+
+    /*
+     * player ถูก resume ไปเป็น socket ใหม่แล้ว
+     */
+    if (!player) {
+        return
+    }
+
     roomManager.markPlayerDisconnected(
         roomId,
         socket.id
     )
+
+    /*
+     * Host หลุดตอนรอในห้อง
+     * ย้าย host ให้คนที่ยังออนไลน์ จะได้กดเริ่มเกมได้
+     */
+    if (
+        room.status ===
+        "waiting" &&
+        room.hostId ===
+        socket.id
+    ) {
+        const nextHost =
+            Array.from(
+                room.players.values()
+            ).find(
+                (item) =>
+                    !item.disconnected
+            )
+
+        if (nextHost) {
+            room.hostId =
+                nextHost.id
+        }
+    }
 
     io.to(
         roomId
@@ -846,6 +975,9 @@ function handleDisconnect(
         {
             playerId:
                 socket.id,
+
+            playerName:
+                player.name,
         }
     )
 
@@ -904,9 +1036,15 @@ function leaveCurrentRoom(
      * เอา player ออกจาก Room ก่อน
      *
      * สำคัญ:
-     * เพราะ finishGameAndCloseRoom()
+     * เพราะ finishGameAndReturnToRoom()
      * จะอ่าน players จาก RoomManager
      */
+    const playerName =
+        getPlayerName(
+            roomId,
+            socket.id
+        )
+
     const roomResult =
         roomService.leaveRoom(
             roomId,
@@ -948,7 +1086,7 @@ function leaveCurrentRoom(
                 gameResult.game.phase ===
                 "game-result"
             ) {
-                finishGameAndCloseRoom(
+                finishGameAndReturnToRoom(
                     io,
                     gameResult.game
                 )
@@ -991,6 +1129,8 @@ function leaveCurrentRoom(
         {
             playerId:
                 socket.id,
+
+            playerName,
         }
     )
 
@@ -1062,6 +1202,7 @@ function registerSocketHandlers(
                 ({
                     roomId,
                     oldPlayerId,
+                    resumeToken,
                 } = {}) => {
                     const normalizedRoomId =
                         String(
@@ -1099,15 +1240,50 @@ function registerSocketHandlers(
                             oldPlayerId
                         )
 
-                    if (
-                        !oldPlayer ||
-                        !oldPlayer.disconnected
-                    ) {
+                    if (!oldPlayer) {
                         socket.emit(
                             "resumeFailed",
                             {
                                 error:
                                     "PLAYER_NOT_FOUND",
+                            }
+                        )
+
+                        return
+                    }
+
+                    if (
+                        !resumeToken ||
+                        oldPlayer.resumeToken !==
+                        resumeToken
+                    ) {
+                        socket.emit(
+                            "resumeFailed",
+                            {
+                                error:
+                                    "INVALID_RESUME_TOKEN",
+                            }
+                        )
+
+                        return
+                    }
+
+                    /*
+                     * ตอน refresh หน้า socket ใหม่อาจต่อเข้ามา
+                     * ก่อน server รู้ว่า socket เก่าหลุด
+                     * client จะ retry เองเมื่อได้ error นี้
+                     */
+                    if (
+                        !oldPlayer.disconnected &&
+                        io.sockets.sockets.has(
+                            oldPlayerId
+                        )
+                    ) {
+                        socket.emit(
+                            "resumeFailed",
+                            {
+                                error:
+                                    "PLAYER_STILL_CONNECTED",
                             }
                         )
 
@@ -1350,8 +1526,9 @@ function registerSocketHandlers(
                             .toUpperCase()
 
                     if (
-                        normalizedRoomId.length <
-                        4
+                        !ROOM_ID_PATTERN.test(
+                            normalizedRoomId
+                        )
                     ) {
                         socket.emit(
                             "roomError",
@@ -1417,14 +1594,16 @@ function registerSocketHandlers(
                     socket.data.roomId =
                         normalizedRoomId
 
-                    const room =
-                        serializeRoom(
-                            result.room
-                        )
-
                     socket.emit(
                         "roomCreated",
-                        room
+                        {
+                            ...serializeRoom(
+                                result.room
+                            ),
+
+                            resumeToken:
+                                player.resumeToken,
+                        }
                     )
 
                     io.emit(
@@ -1574,14 +1753,16 @@ function registerSocketHandlers(
                     socket.data.roomId =
                         normalizedRoomId
 
-                    const serialized =
-                        serializeRoom(
-                            result.room
-                        )
-
                     socket.emit(
                         "roomJoined",
-                        serialized
+                        {
+                            ...serializeRoom(
+                                result.room
+                            ),
+
+                            resumeToken:
+                                player.resumeToken,
+                        }
                     )
 
                     io.to(
@@ -1651,6 +1832,48 @@ function registerSocketHandlers(
                 () => {
                     emitCurrentGameStateToSocket(
                         socket
+                    )
+                }
+            )
+
+            /*
+             * Update Room Settings (host เท่านั้น)
+             */
+
+            socket.on(
+                "updateRoomSettings",
+                (settings = {}) => {
+                    const roomId =
+                        socket.data.roomId
+
+                    if (!roomId) {
+                        return
+                    }
+
+                    const result =
+                        roomManager.updateSettings(
+                            roomId,
+                            socket.id,
+                            settings
+                        )
+
+                    if (
+                        !result.success
+                    ) {
+                        socket.emit(
+                            "roomError",
+                            {
+                                error:
+                                    result.error,
+                            }
+                        )
+
+                        return
+                    }
+
+                    emitRoomUpdate(
+                        io,
+                        result.room
                     )
                 }
             )
@@ -1782,23 +2005,14 @@ function registerSocketHandlers(
                     if (
                         !result.correct
                     ) {
-                        const game =
-                            gameManager.getGame(
-                                roomId
-                            )
-
-                        const message =
-                            game?.guessMessages[
-                            game
-                                .guessMessages
-                                .length - 1
-                            ]
-
                         io.to(
                             roomId
                         ).emit(
                             "chatMessage",
-                            message
+                            toPublicGuessMessage(
+                                roomId,
+                                result.message
+                            )
                         )
 
                         socket.emit(
@@ -1835,8 +2049,20 @@ function registerSocketHandlers(
                             playerId:
                                 socket.id,
 
+                            playerName:
+                                getPlayerName(
+                                    roomId,
+                                    socket.id
+                                ),
+
                             points:
                                 result.points,
+
+                            message:
+                                toPublicGuessMessage(
+                                    roomId,
+                                    result.message
+                                ),
                         }
                     )
 
@@ -1892,7 +2118,9 @@ function registerSocketHandlers(
                             roomId
                         ).emit(
                             "guessHistory",
-                            game.guessMessages
+                            serializeGuessHistory(
+                                game
+                            )
                         )
                     }
                 }

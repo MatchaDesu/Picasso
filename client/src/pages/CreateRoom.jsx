@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import socket from "../socket";
+import socket, { saveSession } from "../socket";
 
 function CreateRoom() {
   const navigate = useNavigate();
@@ -37,9 +37,11 @@ function CreateRoom() {
     function handleRoomCreated(room) {
       setIsCreating(false);
 
-      sessionStorage.setItem("picassoRoomId", room.id);
-
-      sessionStorage.setItem("picassoPlayerId", socket.id);
+      saveSession({
+        roomId: room.id,
+        playerId: socket.id,
+        resumeToken: room.resumeToken,
+      });
 
       navigate("/waiting-room", {
         state: {
@@ -176,7 +178,7 @@ function CreateRoom() {
 
             <div>
               <label className="mb-2 block text-sm font-bold">
-                Drawing Time per Round
+                Drawing Time per Turn
               </label>
 
               <div className="grid grid-cols-4 gap-3">

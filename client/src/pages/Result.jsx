@@ -1,15 +1,71 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
+import socket, { clearSession, resumeSession } from "../socket";
+
+const EMPTY_PLAYERS = [];
+const EMPTY_SCORES = {};
 
 function Result() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const players = location.state?.players || [];
-  const scores = location.state?.scores || {};
+  const players = location.state?.players || EMPTY_PLAYERS;
+  const scores = location.state?.scores || EMPTY_SCORES;
+
+  // ห้องยังอยู่หลังจบเกม (กลับไปเล่นรอบใหม่ได้)
+  const [room, setRoom] = useState(location.state?.room || null);
+
+  useEffect(() => {
+    function handleConnect() {
+      resumeSession();
+    }
+
+    function handleRoomUpdated(updatedRoom) {
+      if (updatedRoom?.id === room?.id) {
+        setRoom(updatedRoom);
+      }
+    }
+
+    // host เริ่มรอบใหม่ระหว่างที่ยังอยู่หน้านี้
+    function handleGameStarted() {
+      navigate("/game", {
+        replace: true,
+        state: {
+          room,
+        },
+      });
+    }
+
+    socket.on("connect", handleConnect);
+    socket.on("roomUpdated", handleRoomUpdated);
+    socket.on("roomResumed", handleRoomUpdated);
+    socket.on("gameStarted", handleGameStarted);
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("roomUpdated", handleRoomUpdated);
+      socket.off("roomResumed", handleRoomUpdated);
+      socket.off("gameStarted", handleGameStarted);
+    };
+  }, [navigate, room]);
+
+  function handleBackToRoom() {
+    navigate("/waiting-room", {
+      replace: true,
+      state: {
+        room,
+      },
+    });
+  }
+
+  function handleLeave() {
+    socket.emit("leaveRoom");
+    clearSession();
+    navigate("/");
+  }
 
   const ranking = useMemo(() => {
     return [...players].sort(
@@ -43,7 +99,7 @@ function Result() {
 
               <button
                 type="button"
-                onClick={() => navigate("/")}
+                onClick={handleLeave}
                 className="mt-5 rounded-full border-[3px] border-[#111111] bg-[#d6f679] px-8 py-3 font-bold"
               >
                 Back to Lobby
@@ -103,13 +159,25 @@ function Result() {
                 })}
               </div>
 
-              <button
-                type="button"
-                onClick={() => navigate("/")}
-                className="mt-6 w-full rounded-full border-[3px] border-[#111111] bg-[#d6f679] px-6 py-4 font-bold transition hover:opacity-80"
-              >
-                Back to Lobby
-              </button>
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                {room && (
+                  <button
+                    type="button"
+                    onClick={handleBackToRoom}
+                    className="flex-1 rounded-full border-[3px] border-[#111111] bg-[#d6f679] px-6 py-4 font-bold transition hover:opacity-80"
+                  >
+                    Back to Room · Play Again
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleLeave}
+                  className="flex-1 rounded-full border-[3px] border-[#111111] bg-white px-6 py-4 font-bold transition hover:bg-[#ebebeb]"
+                >
+                  Leave Room
+                </button>
+              </div>
             </div>
           )}
         </div>

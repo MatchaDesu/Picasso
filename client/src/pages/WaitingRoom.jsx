@@ -4,7 +4,45 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import socket from "../socket";
+import socket, {
+  clearSession,
+  isResumeRetrying,
+  resumeSession,
+} from "../socket";
+
+const DEFAULT_SETTINGS_OPTIONS = {
+  drawingTimes: [30, 60, 90, 120],
+  rounds: [1, 2, 3, 4, 5],
+  categories: [{ id: "mixed", label: "Mixed" }],
+};
+
+function SettingRow({ label, options, value, disabled, onChange }) {
+  return (
+    <div>
+      <p className="mb-2 text-xs font-bold text-[#666666]">{label}</p>
+
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const selected = option.value === value;
+
+          return (
+            <button
+              key={option.value}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(option.value)}
+              className={`h-10 min-w-[56px] rounded-[12px] border-black bg-white px-3 text-sm font-bold transition enabled:hover:bg-[#e5e5e5] disabled:cursor-default ${
+                selected ? "border-4" : "border-2"
+              } ${!selected && disabled ? "opacity-40" : ""}`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function WaitingRoom() {
   const navigate = useNavigate();
@@ -28,15 +66,7 @@ function WaitingRoom() {
       setConnectionStatus("connected");
 
       if (room?.id) {
-        const oldPlayerId = sessionStorage.getItem("picassoPlayerId");
-
-        if (oldPlayerId) {
-          socket.emit("resumeRoom", {
-            roomId: room.id,
-
-            oldPlayerId,
-          });
-        }
+        resumeSession();
       }
     }
 
@@ -80,8 +110,37 @@ function WaitingRoom() {
       setRoom(joinedRoom);
     }
 
+    function handleRoomData(latestRoom) {
+      if (latestRoom?.id !== room.id) {
+        return;
+      }
+
+      if (latestRoom.status === "playing") {
+        navigate("/game", {
+          state: {
+            room: latestRoom,
+          },
+        });
+
+        return;
+      }
+
+      setRoom(latestRoom);
+    }
+
     function handleRoomResumed(resumedRoom) {
       if (resumedRoom.id !== room.id) {
+        return;
+      }
+
+      // เกมเริ่มไปแล้วระหว่างที่หลุด
+      if (resumedRoom.status === "playing") {
+        navigate("/game", {
+          state: {
+            room: resumedRoom,
+          },
+        });
+
         return;
       }
 
@@ -111,9 +170,17 @@ function WaitingRoom() {
         return;
       }
 
-      sessionStorage.removeItem("picassoRoomId");
+      clearSession();
 
-      sessionStorage.removeItem("picassoPlayerId");
+      navigate("/browse-room");
+    }
+
+    function handleResumeFailed() {
+      if (isResumeRetrying()) {
+        return;
+      }
+
+      clearSession();
 
       navigate("/browse-room");
     }
@@ -128,6 +195,8 @@ function WaitingRoom() {
 
     function handleGameError(data) {
       const messages = {
+        ONLY_HOST_CAN_CHANGE_SETTINGS: "Only the host can change settings.",
+
         NOT_ENOUGH_PLAYERS: "At least 3 players are required.",
 
         ONLY_HOST_CAN_START: "Only the host can start the game.",
@@ -144,11 +213,17 @@ function WaitingRoom() {
 
     socket.on("roomResumed", handleRoomResumed);
 
+    socket.on("roomData", handleRoomData);
+
+    socket.on("roomError", handleGameError);
+
     socket.on("playerJoined", handlePlayerJoined);
 
     socket.on("playerLeft", handlePlayerLeft);
 
     socket.on("roomClosed", handleRoomClosed);
+
+    socket.on("resumeFailed", handleResumeFailed);
 
     socket.on("gameStarted", handleGameStarted);
 
@@ -161,17 +236,41 @@ function WaitingRoom() {
 
       socket.off("roomResumed", handleRoomResumed);
 
+      socket.off("roomData", handleRoomData);
+
+      socket.off("roomError", handleGameError);
+
       socket.off("playerJoined", handlePlayerJoined);
 
       socket.off("playerLeft", handlePlayerLeft);
 
       socket.off("roomClosed", handleRoomClosed);
 
+      socket.off("resumeFailed", handleResumeFailed);
+
       socket.off("gameStarted", handleGameStarted);
 
       socket.off("gameError", handleGameError);
     };
   }, [room?.id, navigate, room]);
+
+  /*
+   * ขอข้อมูลห้องล่าสุด (เช่น กลับมาจากหน้า Result
+   * ซึ่ง state ที่ส่งมาอาจเก่าแล้ว)
+   */
+  useEffect(() => {
+    if (room?.id && socket.connected) {
+      socket.emit("getRoom", room.id);
+    }
+  }, [room?.id]);
+
+  function handleChangeSetting(key, value) {
+    setError("");
+
+    socket.emit("updateRoomSettings", {
+      [key]: value,
+    });
+  }
 
   function handleStartGame() {
     setError("");
@@ -182,9 +281,7 @@ function WaitingRoom() {
   function handleLeaveRoom() {
     socket.emit("leaveRoom");
 
-    sessionStorage.removeItem("picassoRoomId");
-
-    sessionStorage.removeItem("picassoPlayerId");
+    clearSession();
 
     navigate("/browse-room");
   }
@@ -223,6 +320,10 @@ function WaitingRoom() {
   );
 
   const isHost = room.hostId === mySocketId;
+
+  const settings = room.settings || {};
+
+  const settingsOptions = room.settingsOptions || DEFAULT_SETTINGS_OPTIONS;
 
   const canStart = players.length >= 3;
 
@@ -355,6 +456,53 @@ function WaitingRoom() {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+
+            <div className="mt-7">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-bold">Game Settings</h3>
+
+                {!isHost && (
+                  <span className="text-[10px] font-bold text-[#888888]">
+                    Only the host can change settings
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-4 rounded-[14px] bg-[#f3f3f3] p-4">
+                <SettingRow
+                  label="Rounds (everyone draws once per round)"
+                  options={settingsOptions.rounds.map((rounds) => ({
+                    value: rounds,
+                    label: String(rounds),
+                  }))}
+                  value={settings.rounds}
+                  disabled={!isHost}
+                  onChange={(value) => handleChangeSetting("rounds", value)}
+                />
+
+                <SettingRow
+                  label="Word Category"
+                  options={settingsOptions.categories.map((category) => ({
+                    value: category.id,
+                    label: category.label,
+                  }))}
+                  value={settings.category}
+                  disabled={!isHost}
+                  onChange={(value) => handleChangeSetting("category", value)}
+                />
+
+                <SettingRow
+                  label="Drawing Time per Turn"
+                  options={settingsOptions.drawingTimes.map((time) => ({
+                    value: time,
+                    label: `${time}s`,
+                  }))}
+                  value={settings.drawingTime}
+                  disabled={!isHost}
+                  onChange={(value) => handleChangeSetting("drawingTime", value)}
+                />
               </div>
             </div>
 
