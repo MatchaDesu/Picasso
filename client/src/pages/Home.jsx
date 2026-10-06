@@ -7,12 +7,17 @@ import ArtistName from "../components/ArtistName";
 import JoinRoom from "../components/JoinRoom";
 import Leaderboard from "../components/Leaderboard";
 import Footer from "../components/Footer";
-import socket from "../socket";
+import socket, { saveSession } from "../socket";
+import { DEFAULT_AVATAR } from "../avatarParts";
 
-const DEFAULT_AVATAR = {
-  furColor: "#e06a3b",
-  earStyle: "Classic",
-  costume: "🎨 Beret",
+
+const ROOM_ERROR_MESSAGES = {
+  ROOM_NOT_FOUND: "Room not found. Check the code and try again.",
+  ROOM_FULL: "That room is full.",
+  GAME_ALREADY_STARTED: "That game has already started.",
+  INVALID_ROOM_ID: "Room codes are 4–12 letters or numbers.",
+  ALREADY_IN_ROOM: "You are already in a room.",
+  QUICK_MATCH_FAILED: "Could not find a room. Please try again.",
 };
 
 function Home() {
@@ -23,6 +28,11 @@ function Home() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   const [avatar, setAvatar] = useState(DEFAULT_AVATAR);
+
+  // "quick" | "join" | null
+  const [pendingAction, setPendingAction] = useState(null);
+
+  const [roomError, setRoomError] = useState("");
 
   useEffect(() => {
     function handlePlayerProfile(profile) {
@@ -43,6 +53,64 @@ function Home() {
       socket.off("playerProfile", handlePlayerProfile);
     };
   }, []);
+
+  /*
+   * Quick Match / Join with Code -> เข้าห้องแล้วไปห้องรอ
+   * (Quick Match อาจได้ roomCreated ถ้าไม่มีห้องว่าง)
+   */
+  useEffect(() => {
+    function handleEnteredRoom(room) {
+      setPendingAction(null);
+
+      saveSession({
+        roomId: room.id,
+        playerId: socket.id,
+        resumeToken: room.resumeToken,
+      });
+
+      navigate("/waiting-room", {
+        state: {
+          room,
+        },
+      });
+    }
+
+    function handleRoomError(data) {
+      setPendingAction(null);
+
+      setRoomError(
+        ROOM_ERROR_MESSAGES[data?.error] || "Unable to join the room.",
+      );
+    }
+
+    socket.on("roomJoined", handleEnteredRoom);
+    socket.on("roomCreated", handleEnteredRoom);
+    socket.on("roomError", handleRoomError);
+
+    return () => {
+      socket.off("roomJoined", handleEnteredRoom);
+      socket.off("roomCreated", handleEnteredRoom);
+      socket.off("roomError", handleRoomError);
+    };
+  }, [navigate]);
+
+  function handleQuickMatch() {
+    if (pendingAction) {
+      return;
+    }
+
+    setRoomError("");
+    setPendingAction("quick");
+
+    socket.emit("quickMatch");
+  }
+
+  function handleJoinWithCode(code) {
+    setRoomError("");
+    setPendingAction("join");
+
+    socket.emit("joinRoom", code);
+  }
 
   function handleArtistNameChange(name) {
     if (!isLoggedIn) {
@@ -79,9 +147,11 @@ function Home() {
           <section className="flex flex-col gap-[14px]">
             <button
               type="button"
-              className="h-12 w-full rounded-full border-2 border-black bg-[#d6f679] text-[17px] font-bold transition hover:opacity-80"
+              onClick={handleQuickMatch}
+              disabled={Boolean(pendingAction)}
+              className="h-12 w-full rounded-full border-2 border-black bg-[#d6f679] text-[17px] font-bold transition hover:opacity-80 disabled:cursor-wait disabled:opacity-60"
             >
-              Quick Match
+              {pendingAction === "quick" ? "Finding a room..." : "Quick Match"}
             </button>
 
             <button
@@ -100,7 +170,11 @@ function Home() {
               Browse Room
             </button>
 
-            <JoinRoom />
+            <JoinRoom
+              onJoin={handleJoinWithCode}
+              isJoining={pendingAction === "join"}
+              error={roomError}
+            />
           </section>
         </div>
 

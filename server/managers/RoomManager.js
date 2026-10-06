@@ -75,391 +75,198 @@ function sanitizeSettings(
     }
 }
 
-class RoomManager {
+/*
+ * ------------------------------------------------
+ * Room logic
+ *
+ * ทุกฟังก์ชันรับ object ห้องแล้วแก้ค่าในนั้นตรงๆ
+ * ไม่มี state ในตัวเอง (state อยู่ใน GameStore)
+ *
+ * room.players เป็น array (เก็บลง Redis เป็น JSON ได้)
+ * ------------------------------------------------
+ */
 
-    constructor() {
-        this.rooms = new Map()
-    }
+function createRoom(roomId, host, settings = {}) {
+    return {
+        id: roomId,
 
-    createRoom(
-        roomId,
-        host,
-        settings = {}
-    ) {
-        const room = {
-            id: roomId,
+        title:
+            String(settings.title || "")
+                .trim()
+                .slice(0, MAX_TITLE_LENGTH) ||
+            "Untitled Room",
 
-            title:
-                String(
-                    settings.title || ""
-                )
-                    .trim()
-                    .slice(
-                        0,
-                        MAX_TITLE_LENGTH
-                    ) ||
-                "Untitled Room",
+        hostId: host.id,
 
-            hostId: host.id,
+        status: "waiting",
 
-            status: "waiting",
+        settings: sanitizeSettings(settings),
 
-            settings:
-                sanitizeSettings(
-                    settings
-                ),
-
-            players: new Map(),
-        }
-
-        room.players.set(
-            host.id,
-            host
-        )
-
-        this.rooms.set(
-            roomId,
-            room
-        )
-
-        return room
-    }
-
-    getRoom(roomId) {
-        return this.rooms.get(
-            roomId
-        )
-    }
-
-    hasRoom(roomId) {
-        return this.rooms.has(
-            roomId
-        )
-    }
-
-    addPlayer(
-        roomId,
-        player
-    ) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return {
-                success: false,
-                error:
-                    "ROOM_NOT_FOUND",
-            }
-        }
-
-        if (
-            room.status !==
-            "waiting"
-        ) {
-            return {
-                success: false,
-                error:
-                    "GAME_ALREADY_STARTED",
-            }
-        }
-
-        if (
-            room.players.has(
-                player.id
-            )
-        ) {
-            return {
-                success: true,
-                room,
-            }
-        }
-
-        const activePlayers =
-            Array.from(
-                room.players.values()
-            ).filter(
-                (item) =>
-                    !item.disconnected
-            )
-
-        if (
-            activePlayers.length >=
-            MAX_PLAYERS
-        ) {
-            return {
-                success: false,
-                error:
-                    "ROOM_FULL",
-            }
-        }
-
-        room.players.set(
-            player.id,
-            player
-        )
-
-        return {
-            success: true,
-            room,
-        }
-    }
-
-    markPlayerDisconnected(
-        roomId,
-        playerId
-    ) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return null
-        }
-
-        const player =
-            room.players.get(
-                playerId
-            )
-
-        if (!player) {
-            return null
-        }
-
-        player.disconnected =
-            true
-
-        player.disconnectedAt =
-            Date.now()
-
-        return room
-    }
-
-    reconnectPlayer(
-        roomId,
-        oldPlayerId,
-        newPlayer
-    ) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return {
-                success: false,
-                error:
-                    "ROOM_NOT_FOUND",
-            }
-        }
-
-        const oldPlayer =
-            room.players.get(
-                oldPlayerId
-            )
-
-        if (!oldPlayer) {
-            return {
-                success: false,
-                error:
-                    "PLAYER_NOT_FOUND",
-            }
-        }
-
-        room.players.delete(
-            oldPlayerId
-        )
-
-        const restoredPlayer = {
-            ...oldPlayer,
-            ...newPlayer,
-            id: newPlayer.id,
-            disconnected: false,
-            disconnectedAt:
-                null,
-        }
-
-        room.players.set(
-            newPlayer.id,
-            restoredPlayer
-        )
-
-        if (
-            room.hostId ===
-            oldPlayerId
-        ) {
-            room.hostId =
-                newPlayer.id
-        }
-
-        return {
-            success: true,
-            room,
-            player:
-                restoredPlayer,
-            oldPlayerId,
-        }
-    }
-
-    removePlayer(
-        roomId,
-        playerId
-    ) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return null
-        }
-
-        room.players.delete(
-            playerId
-        )
-
-        if (
-            room.players.size === 0
-        ) {
-            this.rooms.delete(
-                roomId
-            )
-
-            return null
-        }
-
-        if (
-            room.hostId ===
-            playerId
-        ) {
-            const nextHost =
-                Array.from(
-                    room.players.values()
-                ).find(
-                    (player) =>
-                        !player.disconnected
-                ) ||
-                room.players
-                    .values()
-                    .next()
-                    .value
-
-            if (nextHost) {
-                room.hostId =
-                    nextHost.id
-            }
-        }
-
-        return room
-    }
-
-    updateSettings(
-        roomId,
-        playerId,
-        settings
-    ) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return {
-                success: false,
-                error:
-                    "ROOM_NOT_FOUND",
-            }
-        }
-
-        if (
-            room.hostId !==
-            playerId
-        ) {
-            return {
-                success: false,
-                error:
-                    "ONLY_HOST_CAN_CHANGE_SETTINGS",
-            }
-        }
-
-        if (
-            room.status !==
-            "waiting"
-        ) {
-            return {
-                success: false,
-                error:
-                    "GAME_ALREADY_STARTED",
-            }
-        }
-
-        room.settings =
-            sanitizeSettings(
-                settings,
-                room.settings
-            )
-
-        return {
-            success: true,
-            room,
-        }
-    }
-
-    canStart(roomId) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return false
-        }
-
-        const activePlayers =
-            Array.from(
-                room.players.values()
-            ).filter(
-                (player) =>
-                    !player.disconnected
-            )
-
-        return (
-            room.status ===
-            "waiting" &&
-            activePlayers.length >=
-            MIN_PLAYERS
-        )
-    }
-
-    isFull(roomId) {
-        const room =
-            this.getRoom(roomId)
-
-        if (!room) {
-            return false
-        }
-
-        const activePlayers =
-            Array.from(
-                room.players.values()
-            ).filter(
-                (player) =>
-                    !player.disconnected
-            )
-
-        return (
-            activePlayers.length >=
-            MAX_PLAYERS
-        )
-    }
-
-    deleteRoom(roomId) {
-        return this.rooms.delete(
-            roomId
-        )
-    }
-
-    getRooms() {
-        return Array.from(
-            this.rooms.values()
-        )
+        players: [host],
     }
 }
 
+function findPlayer(room, playerId) {
+    return room.players.find((player) => player.id === playerId) || null
+}
+
+function getActivePlayers(room) {
+    return room.players.filter((player) => !player.disconnected)
+}
+
+/*
+ * ย้าย host ให้คนที่ยังออนไลน์ (ถ้ามี)
+ */
+function transferHost(room) {
+    const nextHost = getActivePlayers(room)[0] || room.players[0]
+
+    if (nextHost) {
+        room.hostId = nextHost.id
+    }
+}
+
+function addPlayer(room, player) {
+    if (room.status !== "waiting") {
+        return {
+            success: false,
+            error: "GAME_ALREADY_STARTED",
+        }
+    }
+
+    if (findPlayer(room, player.id)) {
+        return {
+            success: true,
+        }
+    }
+
+    if (isFull(room)) {
+        return {
+            success: false,
+            error: "ROOM_FULL",
+        }
+    }
+
+    room.players.push(player)
+
+    return {
+        success: true,
+    }
+}
+
+function markPlayerDisconnected(room, playerId, now = Date.now()) {
+    const player = findPlayer(room, playerId)
+
+    if (!player) {
+        return null
+    }
+
+    player.disconnected = true
+    player.disconnectedAt = now
+
+    /*
+     * Host หลุดตอนรอในห้อง
+     * ย้าย host ให้คนที่ยังออนไลน์ จะได้กดเริ่มเกมได้
+     */
+    if (room.status === "waiting" && room.hostId === playerId) {
+        transferHost(room)
+    }
+
+    return player
+}
+
+/*
+ * แทนที่ player เดิม (socket เก่า) ด้วย socket ใหม่
+ * ตำแหน่งใน array เหมือนเดิม ลำดับผู้เล่นจึงไม่เปลี่ยน
+ */
+function reconnectPlayer(room, oldPlayerId, newPlayer) {
+    const index = room.players.findIndex(
+        (player) => player.id === oldPlayerId
+    )
+
+    if (index === -1) {
+        return null
+    }
+
+    const restoredPlayer = {
+        ...room.players[index],
+        ...newPlayer,
+        disconnected: false,
+        disconnectedAt: null,
+    }
+
+    room.players[index] = restoredPlayer
+
+    if (room.hostId === oldPlayerId) {
+        room.hostId = newPlayer.id
+    }
+
+    return restoredPlayer
+}
+
+/*
+ * คืน false ถ้าห้องไม่เหลือใครแล้ว (ผู้เรียกต้องลบห้องทิ้ง)
+ */
+function removePlayer(room, playerId) {
+    room.players = room.players.filter((player) => player.id !== playerId)
+
+    if (room.players.length === 0) {
+        return false
+    }
+
+    if (room.hostId === playerId) {
+        transferHost(room)
+    }
+
+    return true
+}
+
+function updateSettings(room, playerId, settings) {
+    if (room.hostId !== playerId) {
+        return {
+            success: false,
+            error: "ONLY_HOST_CAN_CHANGE_SETTINGS",
+        }
+    }
+
+    if (room.status !== "waiting") {
+        return {
+            success: false,
+            error: "GAME_ALREADY_STARTED",
+        }
+    }
+
+    room.settings = sanitizeSettings(settings, room.settings)
+
+    return {
+        success: true,
+    }
+}
+
+function canStart(room) {
+    return (
+        room.status === "waiting" &&
+        getActivePlayers(room).length >= MIN_PLAYERS
+    )
+}
+
+function isFull(room) {
+    return getActivePlayers(room).length >= MAX_PLAYERS
+}
+
 module.exports = {
-    RoomManager,
     MAX_PLAYERS,
     MIN_PLAYERS,
     SETTINGS_OPTIONS,
     DEFAULT_SETTINGS,
+
+    createRoom,
+    findPlayer,
+    getActivePlayers,
+    addPlayer,
+    markPlayerDisconnected,
+    reconnectPlayer,
+    removePlayer,
+    updateSettings,
+    canStart,
+    isFull,
 }

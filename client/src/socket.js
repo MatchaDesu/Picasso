@@ -1,8 +1,41 @@
 import { io } from "socket.io-client"
 
+import { getToken, subscribeAuth } from "./auth"
+
 // ไม่ตั้ง VITE_SOCKET_URL = ต่อ origin เดียวกับหน้าเว็บ (ผ่าน proxy ของ Vite / nginx)
 // ต้องเป็น undefined ไม่ใช่ "" เพราะ io("") จะต่อไปที่ URL ผิด
-const socket = io(import.meta.env.VITE_SOCKET_URL || undefined)
+const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, {
+  /*
+   * ใช้ WebSocket อย่างเดียว
+   * มี server หลายเครื่องหลัง ALB -> ถ้าใช้ polling แต่ละ request
+   * อาจไปคนละเครื่อง (ต้องตั้ง sticky session ข้ามโดเมน ยุ่งมาก)
+   * WebSocket ต่อครั้งเดียวค้างไว้กับเครื่องเดิมตลอด
+   */
+  transports: ["websocket"],
+
+  // ส่ง token ทุกครั้งที่ต่อ (server ตรวจแล้วตั้งชื่อตาม username)
+  auth: (callback) => callback({ token: getToken() }),
+})
+
+/*
+ * login / logout แล้วต่อใหม่ ให้ server รู้ตัวตนใหม่
+ * (ถ้าอยู่ในห้อง จะ resume กลับห้องเดิมให้เอง)
+ */
+subscribeAuth(() => {
+  if (socket.connected) {
+    socket.disconnect().connect()
+  }
+})
+
+/*
+ * server สั่งตัดการเชื่อมต่อ (เช่น ตอน deploy / scale-in)
+ * socket.io จะไม่ต่อใหม่เอง ต้องสั่งเอง
+ */
+socket.on("disconnect", (reason) => {
+  if (reason === "io server disconnect") {
+    socket.connect()
+  }
+})
 
 /*
  * --------------------------------------------------

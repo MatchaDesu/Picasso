@@ -1,245 +1,124 @@
 const crypto = require("crypto")
 
-const {
-    RoomManager,
-    SETTINGS_OPTIONS,
-    DEFAULT_SETTINGS,
-} = require("../managers/RoomManager")
-
-const {
-    RoomService,
-} = require("../services/RoomService")
-
-const {
-    GameManager,
-} = require("../managers/GameManager")
+const RoomManager = require("../managers/RoomManager")
+const GameManager = require("../managers/GameManager")
 
 const {
     generateGuestName,
 } = require("../utils/NameGenerator")
 
-const roomManager =
-    new RoomManager()
+const {
+    verifyAuthToken,
+} = require("../utils/AuthToken")
 
-const roomService =
-    new RoomService(
-        roomManager
-    )
+/*
+ * ------------------------------------------------
+ * Config
+ * ------------------------------------------------
+ */
 
-const gameManager =
-    new GameManager()
+// เวลาที่รอให้ผู้เล่นที่หลุดกลับมา ก่อนเอาออกจากห้อง
+const RECONNECT_GRACE_TIME = 15000
+
+// scheduler เช็คเกมที่ถึงเวลาเปลี่ยนสถานะ (แทน setTimeout)
+const SCHEDULER_INTERVAL = 250
+
+// heartbeat ของ instance และการเช็ค instance ที่ตายไป
+const HEARTBEAT_INTERVAL = 5000
+const INSTANCE_TTL = 15000
+const SWEEP_INTERVAL = 5000
+
+const ROOM_ID_PATTERN = /^[A-Z0-9]{4,12}$/
+
+const MAX_NAME_LENGTH = 20
+
+/*
+ * ชิ้นส่วน avatar ที่มี (ต้องตรงกับ client/src/avatarParts.js)
+ */
+const AVATAR_OPTIONS = {
+    body: ["Orange", "Black", "White", "Calico", "Cow"],
+    ears: ["N", "L", "S"],
+    accessory: ["none", "Glasses", "Moustache", "Bow", "Pan"],
+}
+
+const DEFAULT_AVATAR = {
+    body: "Orange",
+    ears: "N",
+    accessory: "none",
+}
 
 /*
  * จำกัดการทาย: ไม่เกิน GUESS_LIMIT ครั้ง ภายใน GUESS_WINDOW ms
  */
 const GUESS_LIMIT = 5
-
 const GUESS_WINDOW = 3000
 
-function isGuessRateLimited(
-    socket
-) {
-    const now = Date.now()
+/*
+ * ------------------------------------------------
+ * Serialize (ส่งให้ client)
+ * ------------------------------------------------
+ */
 
-    const recentGuesses = (
-        socket.data.guessTimes || []
-    ).filter(
-        (time) =>
-            now - time <
-            GUESS_WINDOW
-    )
-
-    if (
-        recentGuesses.length >=
-        GUESS_LIMIT
-    ) {
-        socket.data.guessTimes =
-            recentGuesses
-
-        return true
-    }
-
-    recentGuesses.push(now)
-
-    socket.data.guessTimes =
-        recentGuesses
-
-    return false
-}
-
-const RECONNECT_GRACE_TIME =
-    15000
-
-const reconnectTimers =
-    new Map()
-
-const ROOM_ID_PATTERN =
-    /^[A-Z0-9]{4,12}$/
-
-const MAX_AVATAR_FIELD_LENGTH = 50
-
-const DEFAULT_AVATAR = {
-    furColor: "#e06a3b",
-    earStyle: "Classic",
-    costume: "🎨 Beret",
-}
-
-function sanitizeAvatar(
-    avatar
-) {
-    if (!avatar) {
-        return {
-            ...DEFAULT_AVATAR,
-        }
-    }
+/*
+ * รับเฉพาะค่าที่อยู่ในรายการ ค่าอื่นใช้ default
+ */
+function sanitizeAvatar(avatar) {
+    const pick = (key) =>
+        AVATAR_OPTIONS[key].includes(avatar?.[key])
+            ? avatar[key]
+            : DEFAULT_AVATAR[key]
 
     return {
-        furColor:
-            String(
-                avatar.furColor ||
-                DEFAULT_AVATAR.furColor
-            ).slice(
-                0,
-                MAX_AVATAR_FIELD_LENGTH
-            ),
-
-        earStyle:
-            String(
-                avatar.earStyle ||
-                DEFAULT_AVATAR.earStyle
-            ).slice(
-                0,
-                MAX_AVATAR_FIELD_LENGTH
-            ),
-
-        costume:
-            String(
-                avatar.costume ||
-                DEFAULT_AVATAR.costume
-            ).slice(
-                0,
-                MAX_AVATAR_FIELD_LENGTH
-            ),
+        body: pick("body"),
+        ears: pick("ears"),
+        accessory: pick("accessory"),
     }
 }
 
-function serializePlayer(
-    player
-) {
+/*
+ * ห้ามส่ง resumeToken / instanceId ให้คนอื่น
+ */
+function serializePlayer(player) {
     return {
         id: player.id,
-
-        name:
-            player.name,
-
-        isLoggedIn:
-            Boolean(
-                player.isLoggedIn
-            ),
-
-        avatar:
-            sanitizeAvatar(
-                player.avatar
-            ),
-
-        disconnected:
-            Boolean(
-                player.disconnected
-            ),
+        name: player.name,
+        isLoggedIn: Boolean(player.isLoggedIn),
+        avatar: sanitizeAvatar(player.avatar),
+        disconnected: Boolean(player.disconnected),
     }
 }
 
-function serializeRoom(
-    room
-) {
+function serializeRoom(room) {
     if (!room) {
         return null
     }
 
+    const activePlayers = RoomManager.getActivePlayers(room)
+
     return {
         id: room.id,
-
-        title:
-            room.title,
-
-        hostId:
-            room.hostId,
-
-        status:
-            room.status,
+        title: room.title,
+        hostId: room.hostId,
+        status: room.status,
 
         settings: {
-            drawingTime:
-                room.settings
-                    .drawingTime,
-
-            rounds:
-                room.settings
-                    .rounds,
-
-            category:
-                room.settings
-                    .category,
+            drawingTime: room.settings.drawingTime,
+            rounds: room.settings.rounds,
+            category: room.settings.category,
         },
 
-        settingsOptions:
-            SETTINGS_OPTIONS,
+        settingsOptions: RoomManager.SETTINGS_OPTIONS,
 
-        players:
-            Array.from(
-                room.players.values()
-            )
-                .filter(
-                    (player) =>
-                        !player.disconnected
-                )
-                .map(
-                    serializePlayer
-                ),
+        players: activePlayers.map(serializePlayer),
 
-        playerCount:
-            Array.from(
-                room.players.values()
-            ).filter(
-                (player) =>
-                    !player.disconnected
-            ).length,
+        playerCount: activePlayers.length,
 
-        maxPlayers: 8,
+        maxPlayers: RoomManager.MAX_PLAYERS,
     }
 }
 
-function emitRoomUpdate(
-    io,
-    room
-) {
-    if (!room) {
-        return
-    }
-
-    io.to(
-        room.id
-    ).emit(
-        "roomUpdated",
-        serializeRoom(room)
-    )
-}
-
-function getPlayerName(
-    roomId,
-    playerId
-) {
-    const room =
-        roomManager.getRoom(
-            roomId
-        )
-
-    return (
-        room?.players.get(
-            playerId
-        )?.name ||
-        "Player"
-    )
+function getPlayerName(room, playerId) {
+    return RoomManager.findPlayer(room, playerId)?.name || "Player"
 }
 
 /*
@@ -248,2086 +127,1298 @@ function getPlayerName(
  * คำตอบที่ถูกจะไม่มี text
  * กันคำตอบรั่วไปถึงคนที่ยังทายไม่ถูก
  */
-function toPublicGuessMessage(
-    roomId,
-    message
-) {
+function toPublicGuessMessage(room, message) {
     return {
-        id:
-            `${message.timestamp}-${message.playerId}`,
-
-        type:
-            message.correct
-                ? "correct"
-                : "wrong",
-
-        playerId:
-            message.playerId,
-
-        playerName:
-            getPlayerName(
-                roomId,
-                message.playerId
-            ),
-
-        text:
-            message.correct
-                ? ""
-                : message.guess,
-
-        points:
-            message.points || 0,
+        id: `${message.timestamp}-${message.playerId}`,
+        type: message.correct ? "correct" : "wrong",
+        playerId: message.playerId,
+        playerName: getPlayerName(room, message.playerId),
+        text: message.correct ? "" : message.guess,
+        points: message.points || 0,
     }
 }
 
-function serializeGuessHistory(
-    game
-) {
-    return game.guessMessages.map(
-        (message) =>
-            toPublicGuessMessage(
-                game.roomId,
-                message
-            )
+function serializeGuessHistory(room, game) {
+    return game.guessMessages.map((message) =>
+        toPublicGuessMessage(room, message)
     )
 }
 
-function emitPlayerProfile(
-    socket
-) {
-    socket.emit(
-        "playerProfile",
-        {
-            name:
-                socket.data.name,
+function generateRoomId() {
+    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-            isLoggedIn:
-                Boolean(
-                    socket.data
-                        .isLoggedIn
-                ),
+    let roomId = ""
 
-            avatar:
-                sanitizeAvatar(
-                    socket.data.avatar
-                ),
-        }
+    for (let i = 0; i < 4; i++) {
+        roomId += characters[crypto.randomInt(characters.length)]
+    }
+
+    return roomId
+}
+
+function normalizeRoomId(roomId) {
+    return String(roomId || "")
+        .trim()
+        .toUpperCase()
+}
+
+function isGuessRateLimited(socket) {
+    const now = Date.now()
+
+    const recentGuesses = (socket.data.guessTimes || []).filter(
+        (time) => now - time < GUESS_WINDOW
     )
+
+    if (recentGuesses.length >= GUESS_LIMIT) {
+        socket.data.guessTimes = recentGuesses
+
+        return true
+    }
+
+    recentGuesses.push(now)
+
+    socket.data.guessTimes = recentGuesses
+
+    return false
 }
 
 /*
-|--------------------------------------------------------------------------
-| Game State
-|--------------------------------------------------------------------------
-*/
-
-/*
- * จบเกมแล้วพาทุกคนกลับห้องรอ (ไม่ลบห้อง)
- * host กดเริ่มรอบใหม่ได้ และคนใหม่เข้าห้องได้อีกครั้ง
+ * ------------------------------------------------
+ * Register
+ *
+ * ทุก instance รันโค้ดชุดนี้เหมือนกัน
+ * state อยู่ใน gameStore (Redis) ไม่ได้อยู่ในเครื่อง
+ * การ emit ข้ามเครื่องทำผ่าน Socket.IO Redis adapter
+ * ------------------------------------------------
  */
-function finishGameAndReturnToRoom(io, game) {
-    if (!game) {
-        return
+
+function registerSocketHandlers(
+    io,
+    { gameStore, statsStore, instanceId, authSecret }
+) {
+    /*
+     * --------------------------------------------
+     * Emit helpers
+     *
+     * ใช้ io.to(socketId) แทน io.sockets.sockets.get()
+     * เพราะ socket อาจอยู่คนละ instance
+     * --------------------------------------------
+     */
+
+    function emitRoomUpdate(room) {
+        io.to(room.id).emit("roomUpdated", serializeRoom(room))
     }
 
-    const roomId = game.roomId
+    function emitGameState(room, game) {
+        io.to(game.roomId).emit("gameState", GameManager.getPublicState(game))
 
-    /*
-     * ป้องกัน game ถูกปิดไปแล้ว
-     */
-    if (gameManager.getGame(roomId) !== game) {
-        return
+        if (game.phase === "choose-word") {
+            io.to(game.drawerId).emit("wordOptions", game.wordOptions)
+            return
+        }
+
+        if (game.phase === "draw-and-guess") {
+            io.to(game.drawerId).emit("drawerWord", { word: game.word })
+
+            io.to(game.roomId).emit(
+                "guessHistory",
+                serializeGuessHistory(room, game)
+            )
+        }
     }
 
-    const room = roomManager.getRoom(roomId)
+    async function emitCurrentGameStateToSocket(socket, room, game) {
+        socket.emit("gameState", GameManager.getPublicState(game))
+
+        if (game.phase === "choose-word" && game.drawerId === socket.id) {
+            socket.emit("wordOptions", game.wordOptions)
+        }
+
+        if (game.phase === "draw-and-guess") {
+            if (game.drawerId === socket.id) {
+                socket.emit("drawerWord", { word: game.word })
+            }
+
+            // reconnect: ส่งภาพที่วาดไปแล้ว (ไม่ clear canvas)
+            socket.emit("draw:history", await gameStore.getStrokes(room.id))
+
+            socket.emit("guessHistory", serializeGuessHistory(room, game))
+        }
+    }
 
     /*
-     * รวมคนที่หลุดชั่วคราวด้วย
-     * จะได้ไม่หายจากหน้าผลลัพธ์
+     * --------------------------------------------
+     * Game state changes
+     *
+     * เรียกหลังแก้เกมทุกครั้ง (ภายใน room lock)
+     * --------------------------------------------
      */
-    const players = room
-        ? Array.from(room.players.values())
-            .filter(
-                (player) =>
-                    Object.prototype.hasOwnProperty.call(
-                        game.scores,
-                        player.id
-                    )
+
+    async function applyGameChange(room, game, events = []) {
+        if (game.phase === "game-result") {
+            await finishGameAndReturnToRoom(room, game)
+            return
+        }
+
+        /*
+         * เริ่มวาดคำใหม่ -> ล้าง canvas ครั้งเดียว
+         * (hint / guess ไม่ล้าง canvas)
+         */
+        if (events.includes("turnStarted")) {
+            await gameStore.clearStrokes(room.id)
+
+            io.to(room.id).emit("draw:clear")
+        }
+
+        await gameStore.saveGame(game)
+
+        emitGameState(room, game)
+    }
+
+    /*
+     * จบเกมแล้วพาทุกคนกลับห้องรอ (ไม่ลบห้อง)
+     * host กดเริ่มรอบใหม่ได้ และคนใหม่เข้าห้องได้อีกครั้ง
+     */
+    async function finishGameAndReturnToRoom(room, game) {
+        /*
+         * รวมคนที่หลุดชั่วคราวด้วย จะได้ไม่หายจากหน้าผลลัพธ์
+         */
+        const players = room.players
+            .filter((player) =>
+                Object.prototype.hasOwnProperty.call(game.scores, player.id)
             )
             .map(serializePlayer)
-        : []
 
-    const scores = {
-        ...game.scores,
-    }
+        const scores = { ...game.scores }
 
-    gameManager.deleteGame(roomId)
+        await recordGameStats(room, scores)
 
-    if (!room) {
-        return
-    }
+        await gameStore.deleteGame(room.id)
 
-    room.status = "waiting"
+        room.status = "waiting"
 
-    io.to(roomId).emit(
-        "gameFinished",
-        {
+        await gameStore.saveRoom(room)
+
+        io.to(room.id).emit("gameFinished", {
             players,
             scores,
-            room:
-                serializeRoom(room),
-        }
-    )
+            room: serializeRoom(room),
+        })
 
-    emitRoomUpdate(
-        io,
-        room
-    )
+        emitRoomUpdate(room)
 
-    /*
-     * แจ้ง lobby ว่าห้องกลับมาเข้าได้แล้ว
-     */
-    io.emit("roomListChanged")
+        io.emit("roomListChanged")
 
-    console.log(
-        `Game finished in room ${roomId}. Back to waiting room.`
-    )
-}
-
-function emitGameState(
-    io,
-    game
-) {
-    if (!game) {
-        return
+        console.log(`[${instanceId}] Game finished in room ${room.id}.`)
     }
 
     /*
-     * ส่ง public game state
-     *
-     * ห้ามส่ง draw:clear ที่นี่
-     *
-     * เพราะฟังก์ชันนี้ถูกเรียกจาก:
-     *
-     * - Hint
-     * - Guess
-     * - Phase change
-     * - Timer
-     * - Player state
-     *
-     * ถ้า clear ตรงนี้ Canvas จะ reset
-     * ทุกครั้งที่ Hint เพิ่ม
+     * บันทึกคะแนนลง Leaderboard (เฉพาะคนที่ login)
+     * คะแนนสูงสุดของเกม = ชนะ (เสมอกันชนะทุกคน)
      */
+    async function recordGameStats(room, scores) {
+        const topScore = Math.max(0, ...Object.values(scores))
 
-    io.to(
-        game.roomId
-    ).emit(
-        "gameState",
-        gameManager.getPublicState(
-            game
-        )
-    )
-
-    /*
-     * Choose Word
-     */
-
-    if (
-        game.phase ===
-        "choose-word"
-    ) {
-        const drawerSocket =
-            io.sockets.sockets.get(
-                game.drawerId
+        const results = room.players
+            .filter(
+                (player) =>
+                    player.username &&
+                    Object.prototype.hasOwnProperty.call(scores, player.id)
             )
+            .map((player) => ({
+                username: player.username,
+                score: scores[player.id],
+                won: topScore > 0 && scores[player.id] === topScore,
+            }))
 
-        if (drawerSocket) {
-            drawerSocket.emit(
-                "wordOptions",
-                game.wordOptions
-            )
+        if (results.length === 0) {
+            return
         }
 
-        return
+        try {
+            await statsStore.recordResults(results)
+        } catch (error) {
+            // บันทึกไม่ได้ไม่ควรทำให้เกมค้าง
+            console.error(`[${instanceId}] recordGameStats failed:`, error)
+        }
     }
 
     /*
-     * Draw and Guess
+     * --------------------------------------------
+     * Remove player (ออกเอง / หลุดเกินเวลา)
+     * ต้องเรียกภายใน room lock
+     * --------------------------------------------
      */
 
-    if (
-        game.phase ===
-        "draw-and-guess"
-    ) {
-        const drawerSocket =
-            io.sockets.sockets.get(
-                game.drawerId
-            )
+    async function removePlayerFromRoom(room, playerId) {
+        const playerName = getPlayerName(room, playerId)
 
-        if (drawerSocket) {
-            drawerSocket.emit(
-                "drawerWord",
-                {
-                    word:
-                        game.word,
-                }
-            )
+        const game = await gameStore.getGame(room.id)
+
+        let gameResult = null
+
+        if (game) {
+            gameResult = GameManager.removePlayer(game, playerId)
         }
+
+        const hasPlayers = RoomManager.removePlayer(room, playerId)
+
+        await gameStore.cancelDisconnectCleanup(room.id, playerId)
 
         /*
-         * Guess History
-         *
-         * ไม่ clear Canvas
+         * ห้องไม่เหลือใครแล้ว
          */
-
-        io.to(
-            game.roomId
-        ).emit(
-            "guessHistory",
-            serializeGuessHistory(
-                game
-            )
-        )
-
-        return
-    }
-
-    /*
-     * Game Result
-     */
-
-    if (
-        game.phase ===
-        "game-result"
-    ) {
-        finishGameAndReturnToRoom(
-            io,
-            game
-        )
-    }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Send Current Game State To One Socket
-|--------------------------------------------------------------------------
-*/
-
-function emitCurrentGameStateToSocket(
-    socket
-) {
-    const roomId =
-        socket.data.roomId
-
-    if (!roomId) {
-        return
-    }
-
-    const game =
-        gameManager.getGame(
-            roomId
-        )
-
-    if (!game) {
-        return
-    }
-
-    socket.emit(
-        "gameState",
-        gameManager.getPublicState(
-            game
-        )
-    )
-
-    /*
-     * Choose Word
-     */
-
-    if (
-        game.phase ===
-        "choose-word" &&
-        game.drawerId ===
-        socket.id
-    ) {
-        socket.emit(
-            "wordOptions",
-            game.wordOptions
-        )
-    }
-
-    /*
-     * Draw and Guess
-     */
-
-    if (
-        game.phase ===
-        "draw-and-guess"
-    ) {
-        /*
-         * Drawer ได้คำจริง
-         */
-
-        if (
-            game.drawerId ===
-            socket.id
-        ) {
-            socket.emit(
-                "drawerWord",
-                {
-                    word:
-                        game.word,
-                }
-            )
-        }
-
-        /*
-         * Reconnect:
-         * ส่ง drawing history
-         *
-         * ไม่ clear Canvas
-         */
-
-        socket.emit(
-            "draw:history",
-            game.strokes
-        )
-
-        socket.emit(
-            "guessHistory",
-            serializeGuessHistory(
-                game
-            )
-        )
-    }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Start Game
-|--------------------------------------------------------------------------
-*/
-
-function startGame(
-    io,
-    socket
-) {
-    const roomId =
-        socket.data.roomId
-
-    if (!roomId) {
-        socket.emit(
-            "gameError",
-            {
-                error:
-                    "NOT_IN_ROOM",
-            }
-        )
-
-        return
-    }
-
-    const room =
-        roomManager.getRoom(
-            roomId
-        )
-
-    if (!room) {
-        socket.emit(
-            "gameError",
-            {
-                error:
-                    "ROOM_NOT_FOUND",
-            }
-        )
-
-        return
-    }
-
-    if (
-        room.hostId !==
-        socket.id
-    ) {
-        socket.emit(
-            "gameError",
-            {
-                error:
-                    "ONLY_HOST_CAN_START",
-            }
-        )
-
-        return
-    }
-
-    if (
-        !roomManager.canStart(
-            roomId
-        )
-    ) {
-        socket.emit(
-            "gameError",
-            {
-                error:
-                    "NOT_ENOUGH_PLAYERS",
-            }
-        )
-
-        return
-    }
-
-    if (
-        room.status !==
-        "waiting"
-    ) {
-        socket.emit(
-            "gameError",
-            {
-                error:
-                    "GAME_ALREADY_STARTED",
-            }
-        )
-
-        return
-    }
-
-    const players =
-        Array.from(
-            room.players.values()
-        ).filter(
-            (player) =>
-                !player.disconnected
-        )
-
-    /*
-     * สร้าง game
-     *
-     * onPhaseChange:
-     * update game state
-     *
-     * onTurnStart:
-     * clear Canvas เฉพาะตอน
-     * เริ่มคำใหม่
-     */
-
-    const game =
-        gameManager.createGame(
-            roomId,
-            players,
-            room.settings,
-
-            /*
-             * onPhaseChange
-             */
-            (updatedGame) => {
-                emitGameState(
-                    io,
-                    updatedGame
-                )
-            },
-
-            /*
-             * onTurnStart
-             */
-            (updatedGame) => {
-                io.to(
-                    updatedGame.roomId
-                ).emit(
-                    "draw:clear"
-                )
-            }
-        )
-
-    room.status =
-        "playing"
-
-    io.to(
-        roomId
-    ).emit(
-        "gameStarted",
-        {
-            roomId,
-        }
-    )
-
-    /*
-     * createGame() เรียก
-     * onPhaseChange ไปแล้ว
-     *
-     * แต่ emitGameState อีกครั้งตรงนี้
-     * ไม่เป็นปัญหา
-     */
-    emitGameState(
-        io,
-        game
-    )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Player
-|--------------------------------------------------------------------------
-*/
-
-function createPlayerFromSocket(
-    socket
-) {
-    return {
-        id:
-            socket.id,
-
-        name:
-            socket.data.name,
-
-        isLoggedIn:
-            Boolean(
-                socket.data.isLoggedIn
-            ),
-
-        avatar:
-            sanitizeAvatar(
-                socket.data.avatar
-            ),
-
-        disconnected: false,
-
-        disconnectedAt: null,
-
-        /*
-         * ใช้ยืนยันตัวตนตอน resumeRoom
-         * ห้ามส่งให้ผู้เล่นคนอื่น (serializePlayer ไม่ส่ง)
-         */
-        resumeToken:
-            crypto.randomUUID(),
-    }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Cleanup Disconnected Player
-|--------------------------------------------------------------------------
-*/
-
-function cleanupDisconnectedPlayer(
-    io,
-    roomId,
-    oldPlayerId
-) {
-    reconnectTimers.delete(
-        oldPlayerId
-    )
-
-    const room =
-        roomManager.getRoom(
-            roomId
-        )
-
-    if (!room) {
-        return
-    }
-
-    const player =
-        room.players.get(
-            oldPlayerId
-        )
-
-    if (!player) {
-        return
-    }
-
-    /*
-     * Player กลับมา reconnect แล้ว
-     */
-    if (
-        !player.disconnected
-    ) {
-        return
-    }
-
-    /*
-     * หา Game
-     */
-    const game =
-        gameManager.getGame(
-            roomId
-        )
-
-    let gameResult = null
-
-    /*
-     * เอาออกจาก Game ก่อน
-     */
-    if (game) {
-        gameResult =
-            gameManager.removePlayer(
-                roomId,
-                oldPlayerId
-            )
-    }
-
-    /*
-     * เอาออกจาก Room
-     *
-     * ต้องเกิดก่อน finishGameAndReturnToRoom()
-     */
-    const updatedRoom =
-        roomManager.removePlayer(
-            roomId,
-            oldPlayerId
-        )
-
-    /*
-     * ไม่มี Room แล้ว
-     */
-    if (!updatedRoom) {
-        if (
-            gameResult &&
-            gameResult.game
-        ) {
-            gameManager.deleteGame(
-                roomId
-            )
-        }
-
-        io.emit(
-            "roomClosed",
-            roomId
-        )
-
-        return
-    }
-
-    io.to(
-        roomId
-    ).emit(
-        "playerLeft",
-        {
-            playerId:
-                oldPlayerId,
-
-            playerName:
-                player.name,
-        }
-    )
-
-    /*
-     * Game เหลือ 1 คน
-     */
-    if (
-        gameResult &&
-        gameResult.changed &&
-        gameResult.game
-    ) {
-        if (
-            gameResult.game.phase ===
-            "game-result"
-        ) {
-            finishGameAndReturnToRoom(
-                io,
-                gameResult.game
-            )
+        if (!hasPlayers) {
+            await gameStore.deleteRoom(room.id)
+
+            io.emit("roomClosed", room.id)
+            io.emit("roomListChanged")
 
             return
         }
 
-        emitGameState(
-            io,
-            gameResult.game
-        )
-    }
-
-    emitRoomUpdate(
-        io,
-        updatedRoom
-    )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Disconnect
-|--------------------------------------------------------------------------
-*/
-
-function handleDisconnect(
-    io,
-    socket
-) {
-    const roomId =
-        socket.data.roomId
-
-    if (!roomId) {
-        return
-    }
-
-    const room =
-        roomManager.getRoom(
-            roomId
-        )
-
-    if (!room) {
-        return
-    }
-
-    const player =
-        room.players.get(
-            socket.id
-        )
-
-    /*
-     * player ถูก resume ไปเป็น socket ใหม่แล้ว
-     */
-    if (!player) {
-        return
-    }
-
-    roomManager.markPlayerDisconnected(
-        roomId,
-        socket.id
-    )
-
-    /*
-     * Host หลุดตอนรอในห้อง
-     * ย้าย host ให้คนที่ยังออนไลน์ จะได้กดเริ่มเกมได้
-     */
-    if (
-        room.status ===
-        "waiting" &&
-        room.hostId ===
-        socket.id
-    ) {
-        const nextHost =
-            Array.from(
-                room.players.values()
-            ).find(
-                (item) =>
-                    !item.disconnected
-            )
-
-        if (nextHost) {
-            room.hostId =
-                nextHost.id
-        }
-    }
-
-    io.to(
-        roomId
-    ).emit(
-        "playerDisconnected",
-        {
-            playerId:
-                socket.id,
-
-            playerName:
-                player.name,
-        }
-    )
-
-    emitRoomUpdate(
-        io,
-        room
-    )
-
-    const oldPlayerId =
-        socket.id
-
-    const timer =
-        setTimeout(
-            () => {
-                cleanupDisconnectedPlayer(
-                    io,
-                    roomId,
-                    oldPlayerId
-                )
-            },
-            RECONNECT_GRACE_TIME
-        )
-
-    reconnectTimers.set(
-        oldPlayerId,
-        timer
-    )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Leave Room
-|--------------------------------------------------------------------------
-*/
-
-function leaveCurrentRoom(
-    io,
-    socket
-) {
-    const roomId =
-        socket.data.roomId
-
-    if (!roomId) {
-        return
-    }
-
-    /*
-     * หา Game ก่อน
-     */
-    const game =
-        gameManager.getGame(
-            roomId
-        )
-
-    /*
-     * เอา player ออกจาก Room ก่อน
-     *
-     * สำคัญ:
-     * เพราะ finishGameAndReturnToRoom()
-     * จะอ่าน players จาก RoomManager
-     */
-    const playerName =
-        getPlayerName(
-            roomId,
-            socket.id
-        )
-
-    const roomResult =
-        roomService.leaveRoom(
-            roomId,
-            socket.id
-        )
-
-    /*
-     * เอา socket ออกจาก Socket.IO room
-     */
-    socket.leave(
-        roomId
-    )
-
-    socket.data.roomId =
-        null
-
-    /*
-     * ถ้า Game กำลังเล่นอยู่
-     */
-    if (game) {
-        const gameResult =
-            gameManager.removePlayer(
-                roomId,
-                socket.id
-            )
-
         /*
-         * เหลือ 1 คน
-         * หรือ Game จบแล้ว
+         * ผู้เล่นในเกมออกหมด (เหลือแค่คนดู) -> กลับห้องรอ
          */
-        if (
-            gameResult.changed &&
-            gameResult.game
-        ) {
-            /*
-             * Game จบ
-             */
-            if (
-                gameResult.game.phase ===
-                "game-result"
-            ) {
-                finishGameAndReturnToRoom(
-                    io,
-                    gameResult.game
-                )
+        if (gameResult?.empty) {
+            await gameStore.deleteGame(room.id)
 
+            room.status = "waiting"
+        }
+
+        await gameStore.saveRoom(room)
+
+        io.to(room.id).emit("playerLeft", {
+            playerId,
+            playerName,
+        })
+
+        if (game && gameResult?.changed && !gameResult.empty) {
+            await applyGameChange(room, game)
+
+            // applyGameChange อาจจบเกมไปแล้ว (ส่ง roomUpdated ให้แล้ว)
+            if (game.phase === "game-result") {
+                return
+            }
+        }
+
+        emitRoomUpdate(room)
+
+        io.emit("roomListChanged")
+    }
+
+    /*
+     * --------------------------------------------
+     * Disconnect
+     * --------------------------------------------
+     */
+
+    async function markDisconnected(roomId, playerId) {
+        await gameStore.withRoomLock(roomId, async () => {
+            const room = await gameStore.getRoom(roomId)
+
+            const player = room && RoomManager.findPlayer(room, playerId)
+
+            /*
+             * ไม่มีห้องแล้ว / player ถูก resume เป็น socket ใหม่แล้ว
+             * / mark ไปแล้ว
+             */
+            if (!player || player.disconnected) {
                 return
             }
 
-            /*
-             * Game ยังเล่นต่อ
-             */
-            emitGameState(
-                io,
-                gameResult.game
+            RoomManager.markPlayerDisconnected(room, playerId)
+
+            await gameStore.saveRoom(room)
+
+            await gameStore.scheduleDisconnectCleanup(
+                roomId,
+                playerId,
+                Date.now() + RECONNECT_GRACE_TIME
             )
+
+            io.to(roomId).emit("playerDisconnected", {
+                playerId,
+                playerName: player.name,
+            })
+
+            emitRoomUpdate(room)
+        })
+    }
+
+    async function handleDisconnect(socket) {
+        const roomId = socket.data.roomId
+
+        if (!roomId) {
+            return
         }
+
+        await markDisconnected(roomId, socket.id)
     }
 
     /*
-     * Room ไม่มีคนเหลือ
+     * หลุดเกิน RECONNECT_GRACE_TIME -> เอาออกจากห้องจริง
      */
-    if (
-        !roomResult ||
-        !roomResult.room
-    ) {
-        io.emit(
-            "roomClosed",
-            roomId
-        )
+    async function cleanupDisconnectedPlayer(roomId, playerId) {
+        await gameStore.withRoomLock(roomId, async () => {
+            await gameStore.cancelDisconnectCleanup(roomId, playerId)
 
-        return
-    }
+            const room = await gameStore.getRoom(roomId)
 
-    /*
-     * แจ้งคนที่เหลือ
-     */
-    io.to(
-        roomId
-    ).emit(
-        "playerLeft",
-        {
-            playerId:
-                socket.id,
+            const player = room && RoomManager.findPlayer(room, playerId)
 
-            playerName,
-        }
-    )
-
-    emitRoomUpdate(
-        io,
-        roomResult.room
-    )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Register Socket Handlers
-|--------------------------------------------------------------------------
-*/
-
-function registerSocketHandlers(
-    io
-) {
-    io.on(
-        "connection",
-        (socket) => {
-            /*
-             * Default player profile
-             */
-
-            const guestName =
-                generateGuestName()
-
-            socket.data.name =
-                guestName
-
-            socket.data.isLoggedIn =
-                false
-
-            socket.data.avatar = {
-                ...DEFAULT_AVATAR,
+            // กลับมาแล้ว หรือออกไปแล้ว
+            if (!player || !player.disconnected) {
+                return
             }
 
-            socket.data.roomId =
-                null
+            await removePlayerFromRoom(room, playerId)
+        })
+    }
 
-            emitPlayerProfile(
-                socket
-            )
+    /*
+     * --------------------------------------------
+     * Scheduler (ทุก instance รัน)
+     *
+     * - เกมที่ถึงเวลาเปลี่ยนสถานะ (หมดเวลา / เปิด hint)
+     * - ผู้เล่นที่หลุดเกินเวลา
+     *
+     * lock ต่อห้องกันไม่ให้สอง instance ทำซ้ำ
+     * (wait: false = ถ้าเครื่องอื่นทำอยู่ ข้ามไป)
+     * --------------------------------------------
+     */
 
-            console.log(
-                `User connected: ${socket.id} as ${guestName}`
-            )
+    async function runScheduledTasks() {
+        const now = Date.now()
 
-            /*
-             * Get Player Profile
-             */
+        const dueRoomIds = await gameStore.getDueGameRoomIds(now)
 
-            socket.on(
-                "getPlayerProfile",
-                () => {
-                    emitPlayerProfile(
-                        socket
-                    )
-                }
-            )
+        for (const roomId of dueRoomIds) {
+            await gameStore.withRoomLock(
+                roomId,
+                async () => {
+                    const game = await gameStore.getGame(roomId)
+                    const room = await gameStore.getRoom(roomId)
 
-            /*
-             * Resume Room
-             */
-
-            socket.on(
-                "resumeRoom",
-                ({
-                    roomId,
-                    oldPlayerId,
-                    resumeToken,
-                } = {}) => {
-                    const normalizedRoomId =
-                        String(
-                            roomId || ""
-                        )
-                            .trim()
-                            .toUpperCase()
-
-                    if (
-                        !normalizedRoomId ||
-                        !oldPlayerId
-                    ) {
+                    if (!game || !room) {
+                        await gameStore.deleteGame(roomId)
                         return
                     }
 
-                    const room =
-                        roomManager.getRoom(
-                            normalizedRoomId
-                        )
+                    const events = []
+
+                    /*
+                     * เช็คเวลาอีกครั้งใน lock
+                     * เครื่องอื่นอาจทำไปก่อนแล้ว
+                     */
+                    if (!GameManager.tick(game, Date.now(), events)) {
+                        await gameStore.saveGame(game)
+                        return
+                    }
+
+                    await applyGameChange(room, game, events)
+                },
+                { wait: false }
+            )
+        }
+
+        const dueDisconnects = await gameStore.getDueDisconnects(now)
+
+        for (const { roomId, playerId } of dueDisconnects) {
+            await cleanupDisconnectedPlayer(roomId, playerId)
+        }
+    }
+
+    /*
+     * instance ที่ตาย (crash / ถูก scale-in แบบไม่ทันปิด)
+     * ไม่ได้ส่ง disconnect ให้ผู้เล่นของมัน
+     * -> หา player ที่ instance หาย heartbeat แล้ว mark ว่าหลุด
+     */
+    async function sweepDeadInstances() {
+        await gameStore.withLock(
+            "sweep-dead-instances",
+            async () => {
+                const rooms = await gameStore.getRooms()
+
+                const aliveCache = new Map()
+
+                const isAlive = async (id) => {
+                    if (!id || id === instanceId) {
+                        return true
+                    }
+
+                    if (!aliveCache.has(id)) {
+                        aliveCache.set(id, await gameStore.isInstanceAlive(id))
+                    }
+
+                    return aliveCache.get(id)
+                }
+
+                for (const room of rooms) {
+                    for (const player of room.players) {
+                        if (
+                            !player.disconnected &&
+                            !(await isAlive(player.instanceId))
+                        ) {
+                            console.log(
+                                `[${instanceId}] Instance ${player.instanceId} is gone. Marking ${player.id} as disconnected.`
+                            )
+
+                            await markDisconnected(room.id, player.id)
+                        }
+                    }
+                }
+            },
+            { wait: false }
+        )
+    }
+
+    function startInterval(fn, ms, label) {
+        let running = false
+
+        return setInterval(async () => {
+            if (running) {
+                return
+            }
+
+            running = true
+
+            try {
+                await fn()
+            } catch (error) {
+                console.error(`[${instanceId}] ${label} failed:`, error)
+            } finally {
+                running = false
+            }
+        }, ms)
+    }
+
+    const sendHeartbeat = () =>
+        gameStore.heartbeat(instanceId, INSTANCE_TTL)
+
+    sendHeartbeat().catch((error) =>
+        console.error(`[${instanceId}] heartbeat failed:`, error)
+    )
+
+    const intervals = [
+        startInterval(runScheduledTasks, SCHEDULER_INTERVAL, "scheduler"),
+        startInterval(sendHeartbeat, HEARTBEAT_INTERVAL, "heartbeat"),
+        startInterval(sweepDeadInstances, SWEEP_INTERVAL, "sweep"),
+    ]
+
+    /*
+     * --------------------------------------------
+     * Player
+     * --------------------------------------------
+     */
+
+    function createPlayerFromSocket(socket) {
+        return {
+            id: socket.id,
+            name: socket.data.name,
+            isLoggedIn: Boolean(socket.data.isLoggedIn),
+            avatar: sanitizeAvatar(socket.data.avatar),
+            disconnected: false,
+            disconnectedAt: null,
+
+            // username ของบัญชี (null = guest) ใช้บันทึก Leaderboard
+            username: socket.data.username || null,
+
+            // instance ที่ socket นี้ต่ออยู่ (ใช้เช็คตอนเครื่องตาย)
+            instanceId,
+
+            /*
+             * ใช้ยืนยันตัวตนตอน resumeRoom
+             * ห้ามส่งให้ผู้เล่นคนอื่น (serializePlayer ไม่ส่ง)
+             */
+            resumeToken: crypto.randomUUID(),
+        }
+    }
+
+    function emitPlayerProfile(socket) {
+        socket.emit("playerProfile", {
+            name: socket.data.name,
+            isLoggedIn: Boolean(socket.data.isLoggedIn),
+            avatar: sanitizeAvatar(socket.data.avatar),
+
+            // ให้เห็นว่าต่ออยู่กับ server เครื่องไหน (ใช้ตอนเดโม scaling)
+            serverId: instanceId,
+        })
+    }
+
+    /*
+     * --------------------------------------------
+     * Connection
+     * --------------------------------------------
+     */
+
+    io.on("connection", (socket) => {
+        /*
+         * Login: client ส่ง token จาก Auth Lambda มาตอน handshake
+         * ไม่มี / ไม่ถูกต้อง = เล่นแบบ guest
+         */
+        const auth = verifyAuthToken(socket.handshake.auth?.token, authSecret)
+
+        socket.data.name = auth ? auth.username : generateGuestName()
+        socket.data.username = auth ? auth.username : null
+        socket.data.isLoggedIn = Boolean(auth)
+        socket.data.avatar = { ...DEFAULT_AVATAR }
+        socket.data.roomId = null
+
+        emitPlayerProfile(socket)
+
+        console.log(
+            `[${instanceId}] User connected: ${socket.id} as ${socket.data.name}`
+        )
+
+        /*
+         * handler ทุกตัวเป็น async
+         * ห่อไว้ไม่ให้ error ทำ server ล่ม
+         */
+        function on(event, handler) {
+            socket.on(event, async (...args) => {
+                try {
+                    await handler(...args)
+                } catch (error) {
+                    console.error(`[${instanceId}] ${event} failed:`, error)
+                }
+            })
+        }
+
+        on("getPlayerProfile", () => {
+            emitPlayerProfile(socket)
+        })
+
+        /*
+         * Resume Room (refresh / หลุด / instance เดิมตาย)
+         */
+        on("resumeRoom", async ({ roomId, oldPlayerId, resumeToken } = {}) => {
+            const normalizedRoomId = normalizeRoomId(roomId)
+
+            if (!normalizedRoomId || !oldPlayerId) {
+                return
+            }
+
+            const error = await gameStore.withRoomLock(
+                normalizedRoomId,
+                async () => {
+                    const room = await gameStore.getRoom(normalizedRoomId)
 
                     if (!room) {
-                        socket.emit(
-                            "resumeFailed",
-                            {
-                                error:
-                                    "ROOM_NOT_FOUND",
-                            }
-                        )
-
-                        return
+                        return "ROOM_NOT_FOUND"
                     }
 
-                    const oldPlayer =
-                        room.players.get(
-                            oldPlayerId
-                        )
+                    const oldPlayer = RoomManager.findPlayer(room, oldPlayerId)
 
                     if (!oldPlayer) {
-                        socket.emit(
-                            "resumeFailed",
-                            {
-                                error:
-                                    "PLAYER_NOT_FOUND",
-                            }
-                        )
-
-                        return
+                        return "PLAYER_NOT_FOUND"
                     }
 
-                    if (
-                        !resumeToken ||
-                        oldPlayer.resumeToken !==
-                        resumeToken
-                    ) {
-                        socket.emit(
-                            "resumeFailed",
-                            {
-                                error:
-                                    "INVALID_RESUME_TOKEN",
-                            }
-                        )
-
-                        return
+                    if (!resumeToken || oldPlayer.resumeToken !== resumeToken) {
+                        return "INVALID_RESUME_TOKEN"
                     }
 
                     /*
-                     * ตอน refresh หน้า socket ใหม่อาจต่อเข้ามา
-                     * ก่อน server รู้ว่า socket เก่าหลุด
+                     * ตอน refresh socket ใหม่อาจต่อเข้ามาก่อน
+                     * server รู้ว่า socket เก่าหลุด
+                     * เช็คข้ามทุก instance (ผ่าน adapter)
                      * client จะ retry เองเมื่อได้ error นี้
                      */
-                    if (
-                        !oldPlayer.disconnected &&
-                        io.sockets.sockets.has(
-                            oldPlayerId
-                        )
-                    ) {
-                        socket.emit(
-                            "resumeFailed",
-                            {
-                                error:
-                                    "PLAYER_STILL_CONNECTED",
-                            }
-                        )
+                    if (!oldPlayer.disconnected) {
+                        const oldSockets = await io
+                            .in(oldPlayerId)
+                            .fetchSockets()
 
-                        return
+                        if (oldSockets.length > 0) {
+                            return "PLAYER_STILL_CONNECTED"
+                        }
                     }
 
-                    const result =
-                        roomManager.reconnectPlayer(
-                            normalizedRoomId,
-                            oldPlayerId,
-                            {
-                                id:
-                                    socket.id,
-
-                                name:
-                                    oldPlayer.name,
-
-                                isLoggedIn:
-                                    oldPlayer.isLoggedIn,
-
-                                avatar:
-                                    oldPlayer.avatar,
-                            }
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "resumeFailed",
-                            {
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    const timer =
-                        reconnectTimers.get(
-                            oldPlayerId
-                        )
-
-                    if (timer) {
-                        clearTimeout(
-                            timer
-                        )
-
-                        reconnectTimers.delete(
-                            oldPlayerId
-                        )
-                    }
-
-                    socket.data.name =
-                        result.player.name
-
-                    socket.data.isLoggedIn =
-                        Boolean(
-                            result.player
-                                .isLoggedIn
-                        )
-
-                    socket.data.avatar =
-                        sanitizeAvatar(
-                            result.player.avatar
-                        )
-
-                    socket.data.roomId =
-                        normalizedRoomId
-
-                    socket.join(
-                        normalizedRoomId
+                    const player = RoomManager.reconnectPlayer(
+                        room,
+                        oldPlayerId,
+                        {
+                            id: socket.id,
+                            instanceId,
+                        }
                     )
 
-                    const game =
-                        gameManager.getGame(
-                            normalizedRoomId
-                        )
+                    await gameStore.cancelDisconnectCleanup(
+                        normalizedRoomId,
+                        oldPlayerId
+                    )
+
+                    const game = await gameStore.getGame(normalizedRoomId)
 
                     if (game) {
-                        gameManager.replacePlayerId(
-                            game,
-                            oldPlayerId,
-                            socket.id
-                        )
+                        GameManager.replacePlayerId(game, oldPlayerId, socket.id)
+
+                        await gameStore.saveGame(game)
                     }
 
-                    socket.emit(
-                        "roomResumed",
-                        serializeRoom(
-                            result.room
+                    await gameStore.saveRoom(room)
+
+                    socket.data.name = player.name
+                    socket.data.username = player.username || null
+                    socket.data.isLoggedIn = Boolean(player.isLoggedIn)
+                    socket.data.avatar = sanitizeAvatar(player.avatar)
+                    socket.data.roomId = normalizedRoomId
+
+                    socket.join(normalizedRoomId)
+
+                    socket.emit("roomResumed", serializeRoom(room))
+
+                    io.to(normalizedRoomId).emit("playerReconnected", {
+                        player: serializePlayer(player),
+                    })
+
+                    emitRoomUpdate(room)
+
+                    if (game) {
+                        // คนอื่นต้องรู้ id ใหม่ (คะแนน / คนวาด)
+                        io.to(normalizedRoomId).emit(
+                            "gameState",
+                            GameManager.getPublicState(game)
                         )
-                    )
 
-                    io.to(
-                        normalizedRoomId
-                    ).emit(
-                        "playerReconnected",
-                        {
-                            player:
-                                serializePlayer(
-                                    result.player
-                                ),
-                        }
-                    )
+                        await emitCurrentGameStateToSocket(socket, room, game)
+                    }
 
-                    emitRoomUpdate(
-                        io,
-                        result.room
-                    )
-
-                    emitCurrentGameStateToSocket(
-                        socket
-                    )
+                    return null
                 }
             )
 
-            /*
-             * Set Player Name
-             */
+            if (error) {
+                socket.emit("resumeFailed", { error })
+            }
+        })
 
-            socket.on(
-                "setPlayerName",
-                (name) => {
-                    if (
-                        !socket.data
-                            .isLoggedIn
-                    ) {
-                        return
-                    }
+        /*
+         * Set Player Name (ยังต้อง login ก่อน)
+         */
+        on("setPlayerName", async (name) => {
+            if (!socket.data.isLoggedIn) {
+                return
+            }
 
-                    const trimmedName =
-                        String(
-                            name || ""
-                        ).trim()
+            const trimmedName = String(name || "")
+                .trim()
+                .slice(0, MAX_NAME_LENGTH)
 
-                    if (!trimmedName) {
-                        return
-                    }
+            if (!trimmedName) {
+                return
+            }
 
-                    socket.data.name =
-                        trimmedName
+            socket.data.name = trimmedName
 
-                    if (
-                        socket.data.roomId
-                    ) {
-                        const room =
-                            roomManager.getRoom(
-                                socket.data.roomId
-                            )
+            await updateMyPlayer((player) => {
+                player.name = trimmedName
+            })
 
-                        if (room) {
-                            const player =
-                                room.players.get(
-                                    socket.id
-                                )
+            emitPlayerProfile(socket)
+        })
 
-                            if (player) {
-                                player.name =
-                                    trimmedName
+        /*
+         * Set Player Avatar
+         */
+        on("setPlayerAvatar", async (avatar) => {
+            const sanitizedAvatar = sanitizeAvatar(avatar)
 
-                                emitRoomUpdate(
-                                    io,
-                                    room
-                                )
-                            }
-                        }
-                    }
+            socket.data.avatar = sanitizedAvatar
 
-                    emitPlayerProfile(
-                        socket
-                    )
+            await updateMyPlayer((player) => {
+                player.avatar = sanitizedAvatar
+            })
+
+            emitPlayerProfile(socket)
+        })
+
+        async function updateMyPlayer(update) {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                return
+            }
+
+            await gameStore.withRoomLock(roomId, async () => {
+                const room = await gameStore.getRoom(roomId)
+
+                const player = room && RoomManager.findPlayer(room, socket.id)
+
+                if (!player) {
+                    return
                 }
-            )
 
-            /*
-             * Set Player Avatar
-             */
+                update(player)
 
-            socket.on(
-                "setPlayerAvatar",
-                (avatar) => {
-                    const sanitizedAvatar =
-                        sanitizeAvatar(
-                            avatar
-                        )
+                await gameStore.saveRoom(room)
 
-                    socket.data.avatar =
-                        sanitizedAvatar
+                emitRoomUpdate(room)
+            })
+        }
 
-                    if (
-                        socket.data.roomId
-                    ) {
-                        const room =
-                            roomManager.getRoom(
-                                socket.data.roomId
-                            )
+        /*
+         * Create Room
+         */
+        /*
+         * สร้างห้อง (ใช้ทั้ง createRoom และ quickMatch)
+         * คืน true ถ้าสร้างสำเร็จ / false ถ้า id ซ้ำ
+         */
+        async function tryCreateRoom(roomId, settings) {
+            const player = createPlayerFromSocket(socket)
 
-                        if (room) {
-                            const player =
-                                room.players.get(
-                                    socket.id
-                                )
-
-                            if (player) {
-                                player.avatar =
-                                    sanitizedAvatar
-
-                                emitRoomUpdate(
-                                    io,
-                                    room
-                                )
-                            }
-                        }
-                    }
-
-                    emitPlayerProfile(
-                        socket
-                    )
+            const room = await gameStore.withRoomLock(roomId, async () => {
+                if (await gameStore.getRoom(roomId)) {
+                    return null
                 }
-            )
 
-            /*
-             * Create Room
-             */
+                const newRoom = RoomManager.createRoom(roomId, player, settings)
 
-            socket.on(
-                "createRoom",
-                ({
-                    roomId,
-                    roomTitle,
+                await gameStore.saveRoom(newRoom)
+
+                return newRoom
+            })
+
+            if (!room) {
+                return false
+            }
+
+            socket.join(roomId)
+
+            socket.data.roomId = roomId
+
+            socket.emit("roomCreated", {
+                ...serializeRoom(room),
+                resumeToken: player.resumeToken,
+            })
+
+            io.emit("roomListChanged")
+
+            return true
+        }
+
+        /*
+         * เข้าห้อง (ใช้ทั้ง joinRoom และ quickMatch)
+         * คืน error code หรือ null ถ้าเข้าสำเร็จ
+         */
+        async function tryJoinRoom(roomId) {
+            const player = createPlayerFromSocket(socket)
+
+            return gameStore.withRoomLock(roomId, async () => {
+                const room = await gameStore.getRoom(roomId)
+
+                if (!room) {
+                    return "ROOM_NOT_FOUND"
+                }
+
+                const result = RoomManager.addPlayer(room, player)
+
+                if (!result.success) {
+                    return result.error
+                }
+
+                await gameStore.saveRoom(room)
+
+                socket.join(roomId)
+
+                socket.data.roomId = roomId
+
+                socket.emit("roomJoined", {
+                    ...serializeRoom(room),
+                    resumeToken: player.resumeToken,
+                })
+
+                io.to(roomId).emit("playerJoined", {
+                    player: serializePlayer(player),
+                })
+
+                emitRoomUpdate(room)
+
+                io.emit("roomListChanged")
+
+                return null
+            })
+        }
+
+        /*
+         * Create Room
+         */
+        on(
+            "createRoom",
+            async ({ roomId, roomTitle, drawingTime, rounds, category } = {}) => {
+                const normalizedRoomId = normalizeRoomId(roomId)
+
+                if (!ROOM_ID_PATTERN.test(normalizedRoomId)) {
+                    socket.emit("roomError", { error: "INVALID_ROOM_ID" })
+                    return
+                }
+
+                if (socket.data.roomId) {
+                    socket.emit("roomError", { error: "ALREADY_IN_ROOM" })
+                    return
+                }
+
+                const created = await tryCreateRoom(normalizedRoomId, {
+                    title: roomTitle,
                     drawingTime,
                     rounds,
                     category,
-                } = {}) => {
-                    const normalizedRoomId =
-                        String(
-                            roomId || ""
-                        )
-                            .trim()
-                            .toUpperCase()
+                })
 
-                    if (
-                        !ROOM_ID_PATTERN.test(
-                            normalizedRoomId
-                        )
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "INVALID_ROOM_ID",
-                            }
-                        )
-
-                        return
-                    }
-
-                    if (
-                        socket.data.roomId
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "ALREADY_IN_ROOM",
-                            }
-                        )
-
-                        return
-                    }
-
-                    const player =
-                        createPlayerFromSocket(
-                            socket
-                        )
-
-                    const result =
-                        roomService.createRoom(
-                            normalizedRoomId,
-                            player,
-                            {
-                                title:
-                                    roomTitle,
-
-                                drawingTime,
-
-                                rounds,
-
-                                category,
-                            }
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    socket.join(
-                        normalizedRoomId
-                    )
-
-                    socket.data.roomId =
-                        normalizedRoomId
-
-                    socket.emit(
-                        "roomCreated",
-                        {
-                            ...serializeRoom(
-                                result.room
-                            ),
-
-                            resumeToken:
-                                player.resumeToken,
-                        }
-                    )
-
-                    io.emit(
-                        "roomListChanged"
-                    )
+                if (!created) {
+                    socket.emit("roomError", { error: "ROOM_ALREADY_EXISTS" })
                 }
-            )
+            }
+        )
+
+        /*
+         * Get Rooms
+         */
+        on("getRooms", async () => {
+            const rooms = await gameStore.getRooms()
+
+            socket.emit("roomsList", rooms.map(serializeRoom))
+        })
+
+        /*
+         * Join Room
+         */
+        on("joinRoom", async (roomId) => {
+            const normalizedRoomId = normalizeRoomId(roomId)
+
+            if (!ROOM_ID_PATTERN.test(normalizedRoomId)) {
+                socket.emit("roomError", { error: "INVALID_ROOM_ID" })
+                return
+            }
+
+            if (socket.data.roomId) {
+                socket.emit("roomError", { error: "ALREADY_IN_ROOM" })
+                return
+            }
+
+            const error = await tryJoinRoom(normalizedRoomId)
+
+            if (error) {
+                socket.emit("roomError", { error })
+            }
+        })
+
+        /*
+         * Quick Match
+         *
+         * เข้าห้องที่รออยู่และยังไม่เต็ม (คนเยอะสุดก่อน จะได้เริ่มเกมเร็ว)
+         * ไม่มีห้องว่าง -> สร้างห้องใหม่ให้
+         */
+        on("quickMatch", async () => {
+            if (socket.data.roomId) {
+                socket.emit("roomError", { error: "ALREADY_IN_ROOM" })
+                return
+            }
+
+            const openRooms = (await gameStore.getRooms())
+                .filter(
+                    (room) =>
+                        room.status === "waiting" && !RoomManager.isFull(room)
+                )
+                .sort(
+                    (a, b) =>
+                        RoomManager.getActivePlayers(b).length -
+                        RoomManager.getActivePlayers(a).length
+                )
 
             /*
-             * Get Rooms
+             * ห้องอาจเต็ม / เริ่มเกมไปแล้วระหว่างนี้ ลองห้องถัดไป
              */
-
-            socket.on(
-                "getRooms",
-                () => {
-                    const result =
-                        roomService.getRooms()
-
-                    socket.emit(
-                        "roomsList",
-                        result.rooms.map(
-                            serializeRoom
-                        )
-                    )
+            for (const room of openRooms) {
+                if (!(await tryJoinRoom(room.id))) {
+                    return
                 }
+            }
+
+            for (let attempt = 0; attempt < 5; attempt++) {
+                if (
+                    await tryCreateRoom(generateRoomId(), {
+                        title: "Quick Match",
+                    })
+                ) {
+                    return
+                }
+            }
+
+            socket.emit("roomError", { error: "QUICK_MATCH_FAILED" })
+        })
+
+        /*
+         * Get Room
+         */
+        on("getRoom", async (roomId) => {
+            const room = await gameStore.getRoom(normalizeRoomId(roomId))
+
+            if (!room) {
+                socket.emit("roomError", { error: "ROOM_NOT_FOUND" })
+                return
+            }
+
+            socket.emit("roomData", serializeRoom(room))
+        })
+
+        /*
+         * Request Game State
+         */
+        on("requestGameState", async () => {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                return
+            }
+
+            const [room, game] = await Promise.all([
+                gameStore.getRoom(roomId),
+                gameStore.getGame(roomId),
+            ])
+
+            if (room && game) {
+                await emitCurrentGameStateToSocket(socket, room, game)
+            }
+        })
+
+        /*
+         * Leaderboard (หน้า Home)
+         */
+        on("getLeaderboard", async () => {
+            socket.emit("leaderboard", await statsStore.getLeaderboard())
+        })
+
+        /*
+         * Room Settings Options (หน้า Create Room ใช้ก่อนมีห้อง)
+         */
+        on("getRoomSettingsOptions", () => {
+            socket.emit("roomSettingsOptions", {
+                options: RoomManager.SETTINGS_OPTIONS,
+                defaults: RoomManager.DEFAULT_SETTINGS,
+            })
+        })
+
+        /*
+         * Update Room Settings (host เท่านั้น)
+         */
+        on("updateRoomSettings", async (settings = {}) => {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                return
+            }
+
+            await gameStore.withRoomLock(roomId, async () => {
+                const room = await gameStore.getRoom(roomId)
+
+                if (!room) {
+                    socket.emit("roomError", { error: "ROOM_NOT_FOUND" })
+                    return
+                }
+
+                const result = RoomManager.updateSettings(
+                    room,
+                    socket.id,
+                    settings
+                )
+
+                if (!result.success) {
+                    socket.emit("roomError", { error: result.error })
+                    return
+                }
+
+                await gameStore.saveRoom(room)
+
+                emitRoomUpdate(room)
+            })
+        })
+
+        /*
+         * Start Game
+         */
+        on("startGame", async () => {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                socket.emit("gameError", { error: "NOT_IN_ROOM" })
+                return
+            }
+
+            await gameStore.withRoomLock(roomId, async () => {
+                const room = await gameStore.getRoom(roomId)
+
+                let error = null
+
+                if (!room) {
+                    error = "ROOM_NOT_FOUND"
+                } else if (room.hostId !== socket.id) {
+                    error = "ONLY_HOST_CAN_START"
+                } else if (room.status !== "waiting") {
+                    error = "GAME_ALREADY_STARTED"
+                } else if (!RoomManager.canStart(room)) {
+                    error = "NOT_ENOUGH_PLAYERS"
+                }
+
+                if (error) {
+                    socket.emit("gameError", { error })
+                    return
+                }
+
+                const game = GameManager.createGame(
+                    roomId,
+                    RoomManager.getActivePlayers(room),
+                    room.settings
+                )
+
+                room.status = "playing"
+
+                await gameStore.saveRoom(room)
+
+                io.to(roomId).emit("gameStarted", { roomId })
+
+                await applyGameChange(room, game)
+
+                io.emit("roomListChanged")
+            })
+        })
+
+        /*
+         * Select Word
+         */
+        on("selectWord", async (word) => {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                return
+            }
+
+            await gameStore.withRoomLock(roomId, async () => {
+                const [room, game] = await Promise.all([
+                    gameStore.getRoom(roomId),
+                    gameStore.getGame(roomId),
+                ])
+
+                if (!room || !game) {
+                    socket.emit("gameError", { error: "GAME_NOT_FOUND" })
+                    return
+                }
+
+                const events = []
+
+                const result = GameManager.selectWord(
+                    game,
+                    socket.id,
+                    word,
+                    Date.now(),
+                    events
+                )
+
+                if (!result.success) {
+                    socket.emit("gameError", { error: result.error })
+                    return
+                }
+
+                await applyGameChange(room, game, events)
+            })
+        })
+
+        /*
+         * Submit Guess
+         */
+        on("submitGuess", async (guess) => {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                return
+            }
+
+            if (isGuessRateLimited(socket)) {
+                socket.emit("guessResult", {
+                    correct: false,
+                    error: "TOO_MANY_GUESSES",
+                })
+                return
+            }
+
+            await gameStore.withRoomLock(roomId, async () => {
+                const [room, game] = await Promise.all([
+                    gameStore.getRoom(roomId),
+                    gameStore.getGame(roomId),
+                ])
+
+                if (!room || !game) {
+                    socket.emit("guessResult", {
+                        correct: false,
+                        error: "GAME_NOT_FOUND",
+                    })
+                    return
+                }
+
+                const result = GameManager.submitGuess(game, socket.id, guess)
+
+                if (!result.success) {
+                    socket.emit("guessResult", {
+                        correct: false,
+                        error: result.error,
+                    })
+                    return
+                }
+
+                if (result.alreadyGuessed) {
+                    socket.emit("guessResult", {
+                        correct: false,
+                        alreadyGuessed: true,
+                    })
+                    return
+                }
+
+                if (!result.correct) {
+                    await gameStore.saveGame(game)
+
+                    io.to(roomId).emit(
+                        "chatMessage",
+                        toPublicGuessMessage(room, result.message)
+                    )
+
+                    socket.emit("guessResult", { correct: false })
+                    return
+                }
+
+                /*
+                 * Correct Guess
+                 */
+                socket.emit("guessResult", {
+                    correct: true,
+                    points: result.points,
+                })
+
+                io.to(roomId).emit("playerGuessedCorrectly", {
+                    playerId: socket.id,
+                    playerName: getPlayerName(room, socket.id),
+                    points: result.points,
+                    message: toPublicGuessMessage(room, result.message),
+                })
+
+                /*
+                 * ทุกคนตอบถูกแล้ว -> จบ turn
+                 */
+                if (result.allGuessed) {
+                    GameManager.finishTurn(game)
+                }
+
+                await applyGameChange(room, game)
+            })
+        })
+
+        /*
+         * Drawing Stroke
+         *
+         * มาถี่มาก (หลายสิบครั้ง/วินาที) จึงไม่ใช้ room lock
+         * เช็คคนวาดจาก key เล็กๆ แล้ว append ต่อท้าย list
+         */
+        on("draw:stroke", async (stroke) => {
+            const roomId = socket.data.roomId
+
+            if (!roomId) {
+                return
+            }
+
+            if ((await gameStore.getDrawerId(roomId)) !== socket.id) {
+                return
+            }
+
+            const sanitizedStroke = GameManager.sanitizeStroke(stroke)
+
+            if (!sanitizedStroke) {
+                return
+            }
+
+            const added = await gameStore.addStroke(
+                roomId,
+                sanitizedStroke,
+                GameManager.MAX_STROKES_PER_TURN
             )
 
-            /*
-             * Join Room
-             */
+            if (added) {
+                socket.to(roomId).emit("draw:stroke", sanitizedStroke)
+            }
+        })
 
-            socket.on(
-                "joinRoom",
-                (roomId) => {
-                    const normalizedRoomId =
-                        String(
-                            roomId || ""
-                        )
-                            .trim()
-                            .toUpperCase()
+        /*
+         * Clear Drawing
+         */
+        on("draw:clear", async () => {
+            const roomId = socket.data.roomId
 
-                    if (
-                        !normalizedRoomId
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "INVALID_ROOM_ID",
-                            }
-                        )
+            if (!roomId) {
+                return
+            }
 
-                        return
-                    }
+            if ((await gameStore.getDrawerId(roomId)) !== socket.id) {
+                return
+            }
 
-                    if (
-                        socket.data.roomId
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "ALREADY_IN_ROOM",
-                            }
-                        )
+            await gameStore.clearStrokes(roomId)
 
-                        return
-                    }
+            io.to(roomId).emit("draw:clear")
+        })
 
-                    const room =
-                        roomManager.getRoom(
-                            normalizedRoomId
-                        )
+        /*
+         * Leave Room
+         */
+        on("leaveRoom", async () => {
+            const roomId = socket.data.roomId
 
-                    if (!room) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "ROOM_NOT_FOUND",
-                            }
-                        )
+            if (!roomId) {
+                return
+            }
 
-                        return
-                    }
+            socket.leave(roomId)
 
-                    if (
-                        room.status !==
-                        "waiting"
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "GAME_ALREADY_STARTED",
-                            }
-                        )
+            socket.data.roomId = null
 
-                        return
-                    }
+            await gameStore.withRoomLock(roomId, async () => {
+                const room = await gameStore.getRoom(roomId)
 
-                    if (
-                        roomManager.isFull(
-                            normalizedRoomId
-                        )
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    "ROOM_FULL",
-                            }
-                        )
-
-                        return
-                    }
-
-                    const player =
-                        createPlayerFromSocket(
-                            socket
-                        )
-
-                    const result =
-                        roomService.joinRoom(
-                            normalizedRoomId,
-                            player
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    socket.join(
-                        normalizedRoomId
-                    )
-
-                    socket.data.roomId =
-                        normalizedRoomId
-
-                    socket.emit(
-                        "roomJoined",
-                        {
-                            ...serializeRoom(
-                                result.room
-                            ),
-
-                            resumeToken:
-                                player.resumeToken,
-                        }
-                    )
-
-                    io.to(
-                        normalizedRoomId
-                    ).emit(
-                        "playerJoined",
-                        {
-                            player:
-                                serializePlayer(
-                                    player
-                                ),
-                        }
-                    )
-
-                    emitRoomUpdate(
-                        io,
-                        result.room
-                    )
-
-                    io.emit(
-                        "roomListChanged"
-                    )
+                if (room && RoomManager.findPlayer(room, socket.id)) {
+                    await removePlayerFromRoom(room, socket.id)
                 }
-            )
-
-            /*
-             * Get Room
-             */
-
-            socket.on(
-                "getRoom",
-                (roomId) => {
-                    const result =
-                        roomService.getRoom(
-                            roomId
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    socket.emit(
-                        "roomData",
-                        serializeRoom(
-                            result.room
-                        )
-                    )
-                }
-            )
-
-            /*
-             * Request Game State
-             */
-
-            socket.on(
-                "requestGameState",
-                () => {
-                    emitCurrentGameStateToSocket(
-                        socket
-                    )
-                }
-            )
-
-            /*
-             * Room Settings Options
-             * (หน้า Create Room ใช้ก่อนมีห้อง)
-             */
-
-            socket.on(
-                "getRoomSettingsOptions",
-                () => {
-                    socket.emit(
-                        "roomSettingsOptions",
-                        {
-                            options:
-                                SETTINGS_OPTIONS,
-
-                            defaults:
-                                DEFAULT_SETTINGS,
-                        }
-                    )
-                }
-            )
-
-            /*
-             * Update Room Settings (host เท่านั้น)
-             */
-
-            socket.on(
-                "updateRoomSettings",
-                (settings = {}) => {
-                    const roomId =
-                        socket.data.roomId
-
-                    if (!roomId) {
-                        return
-                    }
-
-                    const result =
-                        roomManager.updateSettings(
-                            roomId,
-                            socket.id,
-                            settings
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "roomError",
-                            {
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    emitRoomUpdate(
-                        io,
-                        result.room
-                    )
-                }
-            )
-
-            /*
-             * Start Game
-             */
-
-            socket.on(
-                "startGame",
-                () => {
-                    startGame(
-                        io,
-                        socket
-                    )
-                }
-            )
-
-            /*
-             * Select Word
-             */
-
-            socket.on(
-                "selectWord",
-                (word) => {
-                    const roomId =
-                        socket.data.roomId
-
-                    if (!roomId) {
-                        return
-                    }
-
-                    const result =
-                        gameManager.selectWord(
-                            roomId,
-                            socket.id,
-                            word
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "gameError",
-                            {
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    /*
-                     * สำคัญ:
-                     *
-                     * selectWord() จะเรียก
-                     * onTurnStart เอง
-                     *
-                     * ดังนั้นตรงนี้ไม่ต้อง
-                     * draw:clear ซ้ำ
-                     *
-                     * และ Hint ก็จะไม่เข้ามา
-                     * clear Canvas
-                     */
-
-                    emitGameState(
-                        io,
-                        result.game
-                    )
-                }
-            )
-
-            /*
-             * Submit Guess
-             */
-
-            socket.on(
-                "submitGuess",
-                (guess) => {
-                    const roomId =
-                        socket.data.roomId
-
-                    if (!roomId) {
-                        return
-                    }
-
-                    if (
-                        isGuessRateLimited(
-                            socket
-                        )
-                    ) {
-                        socket.emit(
-                            "guessResult",
-                            {
-                                correct:
-                                    false,
-
-                                error:
-                                    "TOO_MANY_GUESSES",
-                            }
-                        )
-
-                        return
-                    }
-
-                    const result =
-                        gameManager.submitGuess(
-                            roomId,
-                            socket.id,
-                            guess
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        socket.emit(
-                            "guessResult",
-                            {
-                                correct:
-                                    false,
-
-                                error:
-                                    result.error,
-                            }
-                        )
-
-                        return
-                    }
-
-                    if (
-                        result.alreadyGuessed
-                    ) {
-                        socket.emit(
-                            "guessResult",
-                            {
-                                correct:
-                                    false,
-
-                                alreadyGuessed:
-                                    true,
-                            }
-                        )
-
-                        return
-                    }
-
-                    if (
-                        !result.correct
-                    ) {
-                        io.to(
-                            roomId
-                        ).emit(
-                            "chatMessage",
-                            toPublicGuessMessage(
-                                roomId,
-                                result.message
-                            )
-                        )
-
-                        socket.emit(
-                            "guessResult",
-                            {
-                                correct:
-                                    false,
-                            }
-                        )
-
-                        return
-                    }
-
-                    /*
-                     * Correct Guess
-                     */
-
-                    socket.emit(
-                        "guessResult",
-                        {
-                            correct:
-                                true,
-
-                            points:
-                                result.points,
-                        }
-                    )
-
-                    io.to(
-                        roomId
-                    ).emit(
-                        "playerGuessedCorrectly",
-                        {
-                            playerId:
-                                socket.id,
-
-                            playerName:
-                                getPlayerName(
-                                    roomId,
-                                    socket.id
-                                ),
-
-                            points:
-                                result.points,
-
-                            message:
-                                toPublicGuessMessage(
-                                    roomId,
-                                    result.message
-                                ),
-                        }
-                    )
-
-                    const game =
-                        gameManager.getGame(
-                            roomId
-                        )
-
-                    /*
-                     * ทุกคนตอบถูกแล้ว
-                     */
-
-                    if (
-                        result.allGuessed &&
-                        game
-                    ) {
-                        gameManager.finishTurn(
-                            game
-                        )
-
-                        /*
-                         * finishTurn()
-                         * อาจเปลี่ยนเป็น
-                         * choose-word
-                         *
-                         * แต่ไม่ clear Canvas
-                         * ตรงนี้
-                         */
-
-                        emitGameState(
-                            io,
-                            game
-                        )
-
-                        return
-                    }
-
-                    /*
-                     * ยังมีคนเหลือ
-                     */
-
-                    if (game) {
-                        io.to(
-                            roomId
-                        ).emit(
-                            "gameState",
-                            gameManager.getPublicState(
-                                game
-                            )
-                        )
-
-                        io.to(
-                            roomId
-                        ).emit(
-                            "guessHistory",
-                            serializeGuessHistory(
-                                game
-                            )
-                        )
-                    }
-                }
-            )
-
-            /*
-             * Drawing Stroke
-             */
-
-            socket.on(
-                "draw:stroke",
-                (stroke) => {
-                    const roomId =
-                        socket.data.roomId
-
-                    if (!roomId) {
-                        return
-                    }
-
-                    const result =
-                        gameManager.addStroke(
-                            roomId,
-                            socket.id,
-                            stroke
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        return
-                    }
-
-                    socket.to(
-                        roomId
-                    ).emit(
-                        "draw:stroke",
-                        result.stroke
-                    )
-                }
-            )
-
-            /*
-             * Clear Drawing
-             */
-
-            socket.on(
-                "draw:clear",
-                () => {
-                    const roomId =
-                        socket.data.roomId
-
-                    if (!roomId) {
-                        return
-                    }
-
-                    const result =
-                        gameManager.clearDrawing(
-                            roomId,
-                            socket.id
-                        )
-
-                    if (
-                        !result.success
-                    ) {
-                        return
-                    }
-
-                    io.to(
-                        roomId
-                    ).emit(
-                        "draw:clear"
-                    )
-                }
-            )
-
-            /*
-             * Leave Room
-             */
-
-            socket.on(
-                "leaveRoom",
-                () => {
-                    const timer =
-                        reconnectTimers.get(
-                            socket.id
-                        )
-
-                    if (timer) {
-                        clearTimeout(
-                            timer
-                        )
-
-                        reconnectTimers.delete(
-                            socket.id
-                        )
-                    }
-
-                    leaveCurrentRoom(
-                        io,
-                        socket
-                    )
-
-                    io.emit(
-                        "roomListChanged"
-                    )
-                }
-            )
-
-            /*
-             * Disconnect
-             */
-
-            socket.on(
-                "disconnect",
-                () => {
-                    handleDisconnect(
-                        io,
-                        socket
-                    )
-                }
-            )
-        }
-    )
+            })
+        })
+
+        /*
+         * Disconnect
+         */
+        on("disconnect", async () => {
+            await handleDisconnect(socket)
+        })
+    })
+
+    /*
+     * --------------------------------------------
+     * Graceful shutdown (scale-in / deploy)
+     *
+     * mark ผู้เล่นของเครื่องนี้ว่าหลุด
+     * แล้ว client จะต่อใหม่ไปเครื่องอื่นและ resume ได้ทันที
+     * --------------------------------------------
+     */
+
+    async function shutdown() {
+        intervals.forEach(clearInterval)
+
+        const localSockets = Array.from(io.of("/").sockets.values())
+
+        await Promise.allSettled(
+            localSockets.map((socket) => handleDisconnect(socket))
+        )
+
+        await gameStore.removeInstance(instanceId)
+    }
+
+    return {
+        shutdown,
+    }
 }
 
 module.exports = {

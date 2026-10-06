@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 278.5 51.55">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: none;
+        stroke: #000;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 9px;
+      }
+
+      .cls-2 {
+        fill: #dcf4f2;
+        opacity: .6;
+      }
+    </style>
+  </defs>
+  <g id="Layer_3" data-name="Layer 3">
+    <g id="Glasses">
+      <path class="cls-2" d="M110,11S47-1,6,12c0,0,14,38,49,33s50.65-13.74,54.83-18.37,5.17-13.63,5.17-13.63l-5-2Z"/>
+      <path class="cls-2" d="M268,9s-63-12-104,1c0,0,14,38,49,33s50.65-13.74,54.83-18.37,5.17-13.63,5.17-13.63l-5-2Z"/>
+      <path class="cls-1" d="M273.1,4.5s5.62,11.24-11.24,23.6-31.47,14.61-47.2,15.73-37.09-5.62-43.83-16.86-5.62-15.73-5.62-15.73c-24.72-15.73-47.2,2.25-47.2,2.25,0,0-2.64,12.7-14.61,19.11-12.9,6.9-22.9,10.9-38.21,13.49-6.65,1.12-17.13,3.38-38.21-7.87C10.12,29.22,4.5,15.74,4.5,15.74"/>
+    </g>
+  </g>
+</svg>

@@ -4,45 +4,14 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
+import PlayerAvatar from "../components/PlayerAvatar";
+import RoomSettingsForm from "../components/RoomSettingsForm";
+import { DEFAULT_SETTINGS_OPTIONS } from "../roomSettings";
 import socket, {
   clearSession,
   isResumeRetrying,
   resumeSession,
 } from "../socket";
-
-const DEFAULT_SETTINGS_OPTIONS = {
-  drawingTimes: [30, 60, 90, 120],
-  rounds: [1, 2, 3, 4, 5],
-  categories: [{ id: "mixed", label: "Mixed" }],
-};
-
-function SettingRow({ label, options, value, disabled, onChange }) {
-  return (
-    <div>
-      <p className="mb-2 text-xs font-bold text-[#666666]">{label}</p>
-
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => {
-          const selected = option.value === value;
-
-          return (
-            <button
-              key={option.value}
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange(option.value)}
-              className={`h-10 min-w-[56px] rounded-[12px] border-black bg-white px-3 text-sm font-bold transition enabled:hover:bg-[#e5e5e5] disabled:cursor-default ${
-                selected ? "border-4" : "border-2"
-              } ${!selected && disabled ? "opacity-40" : ""}`}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 function WaitingRoom() {
   const navigate = useNavigate();
@@ -404,26 +373,16 @@ function WaitingRoom() {
 
                   const isMe = player.id === mySocketId;
 
-                  const avatar = player.avatar || {
-                    furColor: "#e06a3b",
-
-                    earStyle: "Classic",
-
-                    costume: "🎨 Beret",
-                  };
-
                   return (
                     <div
                       key={player.id}
                       className="flex min-h-[76px] items-center gap-3 rounded-[14px] bg-[#f3f3f3] p-3"
                     >
-                      <div
-                        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-black text-2xl"
-                        style={{
-                          backgroundColor: avatar.furColor,
-                        }}
-                      >
-                        🐱
+                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border-2 border-black bg-white">
+                        <PlayerAvatar
+                          avatar={player.avatar}
+                          className="h-full w-full"
+                        />
                       </div>
 
                       <div className="min-w-0 flex-1">
@@ -446,11 +405,6 @@ function WaitingRoom() {
                             </span>
                           )}
 
-                          <span className="truncate text-[10px] text-[#888888]">
-                            {avatar.earStyle}
-                            {" · "}
-                            {avatar.costume}
-                          </span>
                         </div>
                       </div>
                     </div>
@@ -470,40 +424,12 @@ function WaitingRoom() {
                 )}
               </div>
 
-              <div className="flex flex-col gap-4 rounded-[14px] bg-[#f3f3f3] p-4">
-                <SettingRow
-                  label="Rounds (everyone draws once per round)"
-                  options={settingsOptions.rounds.map((rounds) => ({
-                    value: rounds,
-                    label: String(rounds),
-                  }))}
-                  value={settings.rounds}
-                  disabled={!isHost}
-                  onChange={(value) => handleChangeSetting("rounds", value)}
-                />
-
-                <SettingRow
-                  label="Word Category"
-                  options={settingsOptions.categories.map((category) => ({
-                    value: category.id,
-                    label: category.label,
-                  }))}
-                  value={settings.category}
-                  disabled={!isHost}
-                  onChange={(value) => handleChangeSetting("category", value)}
-                />
-
-                <SettingRow
-                  label="Drawing Time per Turn"
-                  options={settingsOptions.drawingTimes.map((time) => ({
-                    value: time,
-                    label: `${time}s`,
-                  }))}
-                  value={settings.drawingTime}
-                  disabled={!isHost}
-                  onChange={(value) => handleChangeSetting("drawingTime", value)}
-                />
-              </div>
+              <RoomSettingsForm
+                settings={settings}
+                options={settingsOptions}
+                disabled={!isHost}
+                onChange={handleChangeSetting}
+              />
             </div>
 
             <div className="mt-7 rounded-[14px] bg-[#e9e9e9] p-4 text-center">

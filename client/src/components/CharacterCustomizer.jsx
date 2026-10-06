@@ -1,145 +1,104 @@
-import { useEffect, useState } from "react";
+import PlayerAvatar from "./PlayerAvatar";
+import {
+  ACCESSORY_OPTIONS,
+  BODY_OPTIONS,
+  EAR_OPTIONS,
+  normalizeAvatar,
+} from "../avatarParts";
 
-const FUR_COLORS = [
-  {
-    name: "Ginger Orange",
-    value: "#e06a3b",
-  },
-  {
-    name: "Brown",
-    value: "#6d4c41",
-  },
-  {
-    name: "Black",
-    value: "#212121",
-  },
-  {
-    name: "White",
-    value: "#ffffff",
-  },
-  {
-    name: "Green",
-    value: "#00695c",
-  },
-];
-
-const EAR_STYLES = ["Classic", "Scottish Fold", "Fluffy Tuft"];
-
-const COSTUMES = ["🎨 Beret", "🎀 Bowtie", "👓 Glasses", "🧣 Scarf"];
-
-const DEFAULT_AVATAR = {
-  furColor: "#e06a3b",
-  earStyle: "Classic",
-  costume: "🎨 Beret",
-};
+function OptionButton({ selected, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border-2 px-4 py-2 text-xs font-bold transition ${
+        selected ? "border-black bg-black text-white" : "border-[#ccc] hover:border-black"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
 
 function CharacterCustomizer({ value, onChange }) {
-  const [avatar, setAvatar] = useState(value || DEFAULT_AVATAR);
-
-  useEffect(() => {
-    if (value) {
-      setAvatar(value);
-    }
-  }, [value]);
+  const avatar = normalizeAvatar(value);
 
   function updateAvatar(key, newValue) {
-    const updatedAvatar = {
+    onChange?.({
       ...avatar,
       [key]: newValue,
-    };
-
-    setAvatar(updatedAvatar);
-
-    if (onChange) {
-      onChange(updatedAvatar);
-    }
+    });
   }
 
   return (
     <div className="flex flex-col gap-4">
       {/* Character Preview */}
       <div className="flex justify-center">
-        <div
-          className="flex h-[170px] w-[170px] items-center justify-center rounded-full border-2 border-black text-7xl"
-          style={{
-            backgroundColor: avatar.furColor,
-          }}
-        >
-          🐱
+        <div className="flex h-[220px] w-[190px] items-end justify-center rounded-[28px] border-2 border-black bg-[#f6f6f6] p-2">
+          <PlayerAvatar avatar={avatar} variant="full" className="h-full w-full" />
         </div>
       </div>
 
-      {/* Fur Pigment */}
+      {/* Fur */}
       <div className="flex flex-col gap-2">
-        <p className="text-sm font-bold">Fur Pigment</p>
+        <p className="text-sm font-bold">Fur Pattern</p>
 
-        <div className="flex items-center gap-3">
-          {FUR_COLORS.map((color) => {
-            const isSelected = avatar.furColor === color.value;
+        <div className="flex flex-wrap items-center gap-3">
+          {BODY_OPTIONS.map((body) => {
+            const isSelected = avatar.body === body.id;
 
             return (
               <button
-                key={color.value}
+                key={body.id}
                 type="button"
-                title={color.name}
-                onClick={() => updateAvatar("furColor", color.value)}
-                className={`h-[22px] w-[22px] rounded-full border-2 ${
-                  isSelected ? "border-black" : "border-[#ccc]"
-                }`}
-                style={{
-                  backgroundColor: color.value,
-                }}
-              />
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Ears & Expression */}
-      <div className="flex flex-col gap-2">
-        <p className="text-sm font-bold">Ears & Expression</p>
-
-        <div className="flex flex-wrap gap-2">
-          {EAR_STYLES.map((ear) => {
-            const isSelected = avatar.earStyle === ear;
-
-            return (
-              <button
-                key={ear}
-                type="button"
-                onClick={() => updateAvatar("earStyle", ear)}
-                className={`rounded-full border-2 px-4 py-2 text-xs font-bold transition ${
-                  isSelected ? "border-black" : "border-[#ccc]"
+                title={body.label}
+                onClick={() => updateAvatar("body", body.id)}
+                className={`flex items-center gap-2 rounded-full border-2 py-1 pl-1 pr-3 text-xs font-bold transition ${
+                  isSelected ? "border-black" : "border-[#ccc] hover:border-black"
                 }`}
               >
-                {ear}
+                <span
+                  className="h-[20px] w-[20px] rounded-full border-2 border-black"
+                  style={{ backgroundColor: body.swatch }}
+                />
+                {body.label}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Costume & Atelier Gear */}
+      {/* Ears */}
       <div className="flex flex-col gap-2">
-        <p className="text-sm font-bold">Costume & Atelier Gear</p>
+        <p className="text-sm font-bold">Ears</p>
 
         <div className="flex flex-wrap gap-2">
-          {COSTUMES.map((costume) => {
-            const isSelected = avatar.costume === costume;
+          {EAR_OPTIONS.map((ears) => (
+            <OptionButton
+              key={ears.id}
+              selected={avatar.ears === ears.id}
+              onClick={() => updateAvatar("ears", ears.id)}
+            >
+              {ears.label}
+            </OptionButton>
+          ))}
+        </div>
+      </div>
 
-            return (
-              <button
-                key={costume}
-                type="button"
-                onClick={() => updateAvatar("costume", costume)}
-                className={`rounded-full border-2 px-4 py-2 text-xs font-bold transition ${
-                  isSelected ? "border-black" : "border-[#ccc]"
-                }`}
-              >
-                {costume}
-              </button>
-            );
-          })}
+      {/* Accessory */}
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-bold">Accessory</p>
+
+        <div className="flex flex-wrap gap-2">
+          {ACCESSORY_OPTIONS.map((accessory) => (
+            <OptionButton
+              key={accessory.id}
+              selected={avatar.accessory === accessory.id}
+              onClick={() => updateAvatar("accessory", accessory.id)}
+            >
+              {accessory.label}
+            </OptionButton>
+          ))}
         </div>
       </div>
     </div>

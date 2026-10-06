@@ -4,6 +4,11 @@ import { useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
+import RoomSettingsForm from "../components/RoomSettingsForm";
+import {
+  DEFAULT_ROOM_SETTINGS,
+  DEFAULT_SETTINGS_OPTIONS,
+} from "../roomSettings";
 import socket, { saveSession } from "../socket";
 
 function CreateRoom() {
@@ -11,13 +16,15 @@ function CreateRoom() {
 
   const [roomTitle, setRoomTitle] = useState("");
 
-  const [drawingTime, setDrawingTime] = useState(60);
+  const [settings, setSettings] = useState(DEFAULT_ROOM_SETTINGS);
+
+  const [settingsOptions, setSettingsOptions] = useState(
+    DEFAULT_SETTINGS_OPTIONS,
+  );
 
   const [isCreating, setIsCreating] = useState(false);
 
   const [error, setError] = useState("");
-
-  const drawingTimes = [30, 60, 90, 120];
 
   function generateRoomId() {
     const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -50,6 +57,17 @@ function CreateRoom() {
       });
     }
 
+    // รายการตัวเลือก + ค่าเริ่มต้นจาก server
+    function handleSettingsOptions(data) {
+      if (data?.options) {
+        setSettingsOptions(data.options);
+      }
+
+      if (data?.defaults) {
+        setSettings(data.defaults);
+      }
+    }
+
     function handleRoomError(data) {
       setIsCreating(false);
 
@@ -80,6 +98,8 @@ function CreateRoom() {
 
     socket.on("roomCreated", handleRoomCreated);
 
+    socket.on("roomSettingsOptions", handleSettingsOptions);
+
     socket.on("roomError", handleRoomError);
 
     socket.on("disconnect", handleDisconnect);
@@ -87,11 +107,36 @@ function CreateRoom() {
     return () => {
       socket.off("roomCreated", handleRoomCreated);
 
+      socket.off("roomSettingsOptions", handleSettingsOptions);
+
       socket.off("roomError", handleRoomError);
 
       socket.off("disconnect", handleDisconnect);
     };
   }, [navigate, isCreating]);
+
+  useEffect(() => {
+    function requestOptions() {
+      socket.emit("getRoomSettingsOptions");
+    }
+
+    if (socket.connected) {
+      requestOptions();
+    }
+
+    socket.on("connect", requestOptions);
+
+    return () => {
+      socket.off("connect", requestOptions);
+    };
+  }, []);
+
+  function handleChangeSetting(key, value) {
+    setSettings((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
 
   function handleCreateRoom() {
     if (isCreating) {
@@ -115,7 +160,7 @@ function CreateRoom() {
 
       roomTitle,
 
-      drawingTime,
+      ...settings,
     });
 
     setTimeout(() => {
@@ -178,23 +223,18 @@ function CreateRoom() {
 
             <div>
               <label className="mb-2 block text-sm font-bold">
-                Drawing Time per Turn
+                Game Settings
               </label>
 
-              <div className="grid grid-cols-4 gap-3">
-                {drawingTimes.map((time) => (
-                  <button
-                    key={time}
-                    type="button"
-                    onClick={() => setDrawingTime(time)}
-                    className={`h-12 rounded-[14px] border-2 border-black bg-white text-sm font-bold transition hover:bg-[#e5e5e5] ${
-                      drawingTime === time ? "border-4" : ""
-                    }`}
-                  >
-                    {time}s
-                  </button>
-                ))}
-              </div>
+              <RoomSettingsForm
+                settings={settings}
+                options={settingsOptions}
+                onChange={handleChangeSetting}
+              />
+
+              <p className="mt-2 text-xs text-[#888888]">
+                You can still change these in the waiting room.
+              </p>
             </div>
 
             <div className="mt-10 flex items-center justify-between gap-4">

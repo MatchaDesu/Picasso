@@ -1,41 +1,38 @@
-import { useEffect, useState } from "react";
+import { getAvatarLayers } from "../avatarParts";
 
-import { getPlayerAvatar } from "../utils/avatar";
+/*
+ * วาด avatar แมวจากชิ้นส่วน SVG
+ *
+ * variant
+ *   "full" : ทั้งตัว (หน้าแต่งตัว)
+ *   "head" : ครอปเฉพาะหัว ใส่ในวงกลม (รายชื่อผู้เล่น)
+ */
+const VIEW_BOXES = {
+  full: "-10 -160 445.27 677.75",
+  head: "20 -150 385 385",
+};
 
-function PlayerAvatar({ size = "normal" }) {
-  const [avatar, setAvatar] = useState(getPlayerAvatar());
-
-  useEffect(() => {
-    function handleStorageChange(event) {
-      if (event.key === "playerAvatar") {
-        setAvatar(getPlayerAvatar());
-      }
-    }
-
-    window.addEventListener("storage", handleStorageChange);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-    };
-  }, []);
-
-  const sizeClass =
-    size === "small"
-      ? "h-8 w-8 text-lg"
-      : size === "large"
-        ? "h-20 w-20 text-4xl"
-        : "h-10 w-10 text-xl";
+function PlayerAvatar({ avatar, variant = "head", className = "" }) {
+  const layers = getAvatarLayers(avatar);
 
   return (
-    <div
-      className={`flex shrink-0 items-center justify-center rounded-full border-2 border-black ${sizeClass}`}
-      style={{
-        backgroundColor: avatar.furColor,
-      }}
-      title={`${avatar.earStyle} ${avatar.costume}`}
+    <svg
+      viewBox={VIEW_BOXES[variant] || VIEW_BOXES.head}
+      className={className}
+      role="img"
+      aria-label="Player avatar"
     >
-      🐱
-    </div>
+      {layers.map((layer) => (
+        <image
+          key={layer.key}
+          href={layer.href}
+          x={layer.x}
+          y={layer.y}
+          width={layer.width}
+          height={layer.height}
+        />
+      ))}
+    </svg>
   );
 }
 

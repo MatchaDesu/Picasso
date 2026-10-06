@@ -74,7 +74,8 @@ function BrowseRoom() {
 
     socket.on("roomError", handleRoomError);
 
-    loadRooms();
+    // state เริ่มต้นเป็น loading อยู่แล้ว ขอรายการห้องอย่างเดียว
+    socket.emit("getRooms");
 
     return () => {
       socket.off("roomsList", handleRoomsList);

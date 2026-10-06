@@ -17,6 +17,11 @@ export default defineConfig({
         target: "http://localhost:3000",
         ws: true,
       },
+
+      // Auth Lambda ที่รันในเครื่อง (node lambda/auth/local-server.js)
+      "/auth": {
+        target: "http://localhost:3001",
+      },
     },
   },
 })

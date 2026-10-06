@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
+import PlayerAvatar from "../components/PlayerAvatar";
 import DrawingBoard from "../components/DrawingBoard";
 import socket, {
   clearSession,
@@ -841,13 +842,11 @@ function Game() {
                       : "bg-white"
                   }`}
                 >
-                  <div
-                    className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-xl"
-                    style={{
-                      backgroundColor: player.avatar?.furColor || "#d4d4d4",
-                    }}
-                  >
-                    🐱
+                  <div className="relative h-11 w-11 shrink-0 rounded-full border-2 border-black bg-[#f6f6f6]">
+                    <PlayerAvatar
+                      avatar={player.avatar}
+                      className="h-full w-full overflow-hidden rounded-full"
+                    />
                     {drawer && (
                       <span className="absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full bg-[#a2401c] text-xs text-white">
                         ✎

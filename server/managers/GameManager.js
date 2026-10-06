@@ -15,1307 +15,722 @@ const MAX_STROKES_PER_TURN = 20000
 const MAX_POINTS_PER_STROKE = 50
 const MAX_BRUSH_SIZE = 50
 
-class GameManager {
-    constructor() {
-        this.games = new Map()
+/*
+ * ------------------------------------------------
+ * Game logic
+ *
+ * ทุกฟังก์ชันรับ object เกมแล้วแก้ค่าในนั้นตรงๆ
+ * ไม่มี state / timer ในตัวเอง (state อยู่ใน GameStore)
+ *
+ * แทน setTimeout ด้วยเวลาที่ต้องเปลี่ยนสถานะ:
+ *   - phaseEndsAt : หมดเวลาเลือกคำ / หมดเวลาวาด
+ *   - nextHintAt  : เวลาเปิด hint ตัวถัดไป
+ * scheduler ใน socketHandler เรียก tick() เมื่อถึงเวลา
+ * (instance ไหนก็ทำได้ ไม่ผูกกับเครื่องที่สร้างเกม)
+ *
+ * events: array ที่ฟังก์ชันเติมให้ผู้เรียกรู้ว่าเกิดอะไรขึ้น
+ *   - "turnStarted" : เริ่มวาดคำใหม่ (ต้องล้าง canvas / strokes)
+ * ------------------------------------------------
+ */
+
+function createGame(roomId, players, settings = {}, now = Date.now()) {
+    const playerIds = players.map((player) => player.id)
+
+    const scores = {}
+
+    playerIds.forEach((playerId) => {
+        scores[playerId] = 0
+    })
+
+    const game = {
+        roomId,
+        playerIds,
+        scores,
+
+        drawingTime: settings.drawingTime || 60,
+
+        category: settings.category || MIXED_CATEGORY,
+
+        /*
+         * คำที่ใช้ไปแล้วในเกมนี้ (กันคำซ้ำ)
+         */
+        usedWords: new Set(),
+
+        phase: "choose-word",
+
+        /*
+         * 1 round = ผู้เล่นทุกคนได้วาดคนละ 1 ครั้ง
+         */
+        round: 1,
+        totalRounds: settings.rounds || 1,
+
+        /*
+         * turnId เพิ่มขึ้นทุกครั้งที่เริ่ม turn ใหม่
+         * client ใช้ reset UI (chat / คำตอบ)
+         */
+        turnId: 0,
+
+        turnIndex: 0,
+        drawerId: playerIds[0],
+
+        word: "",
+        wordOptions: [],
+
+        guessedPlayers: new Set(),
+        guessMessages: [],
+
+        phaseEndsAt: 0,
+        nextHintAt: 0,
+
+        hint: "",
+        revealedIndexes: new Set(),
+        maxHints: 0,
     }
 
-    createGame(
-        roomId,
-        players,
-        settings = {},
-        onPhaseChange = null,
-        onTurnStart = null
-    ) {
-        const playerIds = players.map(
-            (player) => player.id
-        )
+    startChooseWord(game, now)
 
-        const scores = {}
+    return game
+}
 
-        playerIds.forEach((playerId) => {
-            scores[playerId] = 0
+function startChooseWord(game, now = Date.now()) {
+    game.turnId += 1
+
+    game.phase = "choose-word"
+
+    game.word = ""
+    game.wordOptions = getRandomWords(game, 3)
+
+    game.guessedPlayers = new Set()
+    game.guessMessages = []
+
+    game.hint = ""
+    game.revealedIndexes = new Set()
+    game.maxHints = 0
+    game.nextHintAt = 0
+
+    game.phaseEndsAt = now + CHOOSE_WORD_TIME * 1000
+}
+
+function getRandomWords(game, count) {
+    const words = getWordsForCategory(game.category)
+
+    let available = words.filter((word) => !game.usedWords.has(word))
+
+    /*
+     * คำในหมวดใช้หมดแล้ว เริ่มวนใหม่
+     */
+    if (available.length < count) {
+        game.usedWords.clear()
+
+        available = [...words]
+    }
+
+    /*
+     * Fisher-Yates shuffle
+     */
+    for (let index = available.length - 1; index > 0; index--) {
+        const swapIndex = Math.floor(Math.random() * (index + 1))
+
+        ;[available[index], available[swapIndex]] = [
+            available[swapIndex],
+            available[index],
+        ]
+    }
+
+    return available.slice(0, count)
+}
+
+function selectWord(game, playerId, word, now = Date.now(), events = []) {
+    if (game.phase !== "choose-word") {
+        return {
+            success: false,
+            error: "NOT_CHOOSE_WORD_PHASE",
+        }
+    }
+
+    if (game.drawerId !== playerId) {
+        return {
+            success: false,
+            error: "NOT_DRAWER",
+        }
+    }
+
+    if (!game.wordOptions.includes(word)) {
+        return {
+            success: false,
+            error: "INVALID_WORD",
+        }
+    }
+
+    game.word = word
+
+    game.usedWords.add(word)
+
+    game.phase = "draw-and-guess"
+
+    game.guessedPlayers = new Set()
+    game.guessMessages = []
+
+    game.revealedIndexes = new Set()
+    game.maxHints = getMaxHints(word)
+    game.hint = createHiddenHint(word, game.revealedIndexes)
+
+    game.phaseEndsAt = now + game.drawingTime * 1000
+
+    scheduleNextHint(game, now)
+
+    /*
+     * บอกผู้เรียกว่าเริ่ม turn ใหม่
+     * ต้องล้าง strokes / canvas ครั้งเดียวตรงนี้
+     * (hint ห้ามล้าง canvas)
+     */
+    events.push("turnStarted")
+
+    return {
+        success: true,
+    }
+}
+
+function createHiddenHint(word, revealedIndexes) {
+    return word
+        .split("")
+        .map((character, index) => {
+            if (character === " ") {
+                return " "
+            }
+
+            if (revealedIndexes.has(index)) {
+                return character
+            }
+
+            return "_"
         })
+        .join(" ")
+}
 
-        const game = {
-            roomId,
-            playerIds,
-            scores,
+function revealHintCharacter(game) {
+    const hiddenIndexes = []
 
-            drawingTime:
-                settings.drawingTime || 60,
-
-            category:
-                settings.category ||
-                MIXED_CATEGORY,
-
-            /*
-             * คำที่ใช้ไปแล้วในเกมนี้ (กันคำซ้ำ)
-             */
-            usedWords: new Set(),
-
-            phase: "choose-word",
-
-            /*
-             * 1 round = ผู้เล่นทุกคนได้วาดคนละ 1 ครั้ง
-             */
-            round: 1,
-            totalRounds:
-                settings.rounds || 1,
-
-            /*
-             * turnId เพิ่มขึ้นทุกครั้งที่เริ่ม turn ใหม่
-             * client ใช้ reset UI (chat / คำตอบ)
-             */
-            turnId: 0,
-
-            turnIndex: 0,
-            drawerId: playerIds[0],
-
-            word: "",
-            wordOptions: [],
-
-            guessedPlayers: new Set(),
-            guessMessages: [],
-
-            phaseEndsAt: 0,
-
-            hint: "",
-            revealedIndexes: new Set(),
-            hintRevealed: false,
-            maxHints: 0,
-
-            strokes: [],
-
-            timer: null,
-            hintTimer: null,
-
-            onPhaseChange,
-            onTurnStart,
-        }
-
-        this.games.set(
-            roomId,
-            game
-        )
-
-        this.startChooseWord(game)
-
-        return game
-    }
-
-    getGame(roomId) {
-        return this.games.get(roomId)
-    }
-
-    deleteGame(roomId) {
-        const game = this.games.get(roomId)
-
-        if (game) {
-            this.clearTimers(game)
-        }
-
-        this.games.delete(roomId)
-    }
-
-    clearTimers(game) {
-        if (game.timer) {
-            clearTimeout(game.timer)
-            game.timer = null
-        }
-
-        if (game.hintTimer) {
-            clearTimeout(game.hintTimer)
-            game.hintTimer = null
+    for (let index = 0; index < game.word.length; index++) {
+        if (game.word[index] !== " " && !game.revealedIndexes.has(index)) {
+            hiddenIndexes.push(index)
         }
     }
 
-    startChooseWord(game) {
-        if (!game) {
-            return
-        }
-
-        this.clearTimers(game)
-
-        game.turnId += 1
-
-        game.phase = "choose-word"
-
-        game.word = ""
-        game.wordOptions = this.getRandomWords(
-            game,
-            3
-        )
-
-        game.guessedPlayers = new Set()
-        game.guessMessages = []
-
-        game.hint = ""
-        game.revealedIndexes = new Set()
-        game.hintRevealed = false
-
-        game.strokes = []
-
-        game.phaseEndsAt =
-            Date.now() +
-            CHOOSE_WORD_TIME * 1000
-
-        if (game.onPhaseChange) {
-            game.onPhaseChange(game)
-        }
-
-        game.timer = setTimeout(() => {
-            if (
-                game.phase !==
-                "choose-word"
-            ) {
-                return
-            }
-
-            const defaultWord =
-                game.wordOptions[0]
-
-            this.selectWord(
-                game.roomId,
-                game.drawerId,
-                defaultWord
-            )
-        }, CHOOSE_WORD_TIME * 1000)
+    if (hiddenIndexes.length === 0) {
+        return false
     }
 
-    getRandomWords(
-        game,
-        count
-    ) {
-        const words =
-            getWordsForCategory(
-                game.category
-            )
+    const index =
+        hiddenIndexes[Math.floor(Math.random() * hiddenIndexes.length)]
 
-        let available =
-            words.filter(
-                (word) =>
-                    !game.usedWords.has(
-                        word
-                    )
-            )
+    game.revealedIndexes.add(index)
 
-        /*
-         * คำในหมวดใช้หมดแล้ว เริ่มวนใหม่
-         */
-        if (
-            available.length <
-            count
-        ) {
-            game.usedWords.clear()
+    game.hint = createHiddenHint(game.word, game.revealedIndexes)
 
-            available = [...words]
-        }
+    return true
+}
 
-        /*
-         * Fisher-Yates shuffle
-         */
-        for (
-            let index = available.length - 1;
-            index > 0;
-            index--
-        ) {
-            const swapIndex =
-                Math.floor(
-                    Math.random() *
-                    (index + 1)
-                )
-
-            ;[
-                available[index],
-                available[swapIndex],
-            ] = [
-                available[swapIndex],
-                available[index],
-            ]
-        }
-
-        return available.slice(
-            0,
-            count
-        )
+/*
+ * ตั้งเวลาเปิด hint ตัวถัดไป
+ *
+ * กระจาย hint เท่าๆ กันตลอดเวลาวาด
+ * เช่น เวลา 60s, hint 2 ตัว -> เปิดที่ 20s และ 40s
+ *
+ * เปิดครบตามจำนวนที่กำหนดแล้วไม่เปิดเพิ่ม (กันคำตอบโผล่ทั้งคำ)
+ */
+function scheduleNextHint(game, from) {
+    if (game.revealedIndexes.size >= game.maxHints) {
+        game.nextHintAt = 0
+        return
     }
 
-    selectWord(
-        roomId,
-        playerId,
-        word
-    ) {
-        const game =
-            this.games.get(roomId)
+    const hintDelay = (game.drawingTime * 1000) / (game.maxHints + 1)
 
-        if (!game) {
-            return {
-                success: false,
-                error: "GAME_NOT_FOUND",
-            }
+    game.nextHintAt = from + hintDelay
+}
+
+/*
+ * จำนวนตัวอักษรสูงสุดที่ hint จะเปิดให้
+ *
+ * ไม่เกินครึ่งคำ และต้องเหลือซ่อนอย่างน้อย 1 ตัวเสมอ
+ * เช่น cat -> 1, pizza -> 2, ice cream -> 4
+ */
+function getMaxHints(word) {
+    const letters = word.replace(/\s/g, "").length
+
+    return Math.max(0, Math.min(Math.floor(letters / 2), letters - 1))
+}
+
+/*
+ * ตัดช่องว่างหัวท้าย / ช่องว่างซ้ำ และไม่สนตัวพิมพ์ใหญ่เล็ก
+ * "  Ice   Cream " -> "ice cream"
+ */
+function normalizeGuess(text) {
+    return String(text || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLowerCase()
+}
+
+function submitGuess(game, playerId, guess, now = Date.now()) {
+    if (game.phase !== "draw-and-guess") {
+        return {
+            success: false,
+            error: "NOT_DRAWING_PHASE",
         }
+    }
 
-        if (
-            game.phase !==
-            "choose-word"
-        ) {
-            return {
-                success: false,
-                error: "NOT_CHOOSE_WORD_PHASE",
-            }
+    if (playerId === game.drawerId) {
+        return {
+            success: false,
+            error: "DRAWER_CANNOT_GUESS",
         }
+    }
 
-        if (
-            game.drawerId !==
-            playerId
-        ) {
-            return {
-                success: false,
-                error: "NOT_DRAWER",
-            }
-        }
-
-        if (
-            !game.wordOptions.includes(
-                word
-            )
-        ) {
-            return {
-                success: false,
-                error: "INVALID_WORD",
-            }
-        }
-
-        this.clearTimers(game)
-
-        game.word = word
-
-        game.usedWords.add(
-            word
-        )
-
-        game.maxHints =
-            this.getMaxHints(
-                word
-            )
-
-        game.phase =
-            "draw-and-guess"
-
-        game.guessedPlayers =
-            new Set()
-
-        game.guessMessages = []
-
-        game.revealedIndexes =
-            new Set()
-
-        game.hint =
-            this.createHiddenHint(
-                word,
-                game.revealedIndexes
-            )
-
-        game.hintRevealed =
-            false
-
-        /*
-         * สำคัญมาก:
-         *
-         * reset strokes เฉพาะตอนเริ่ม
-         * คำใหม่เท่านั้น
-         */
-        game.strokes = []
-
-        game.phaseEndsAt =
-            Date.now() +
-            game.drawingTime * 1000
-
-        /*
-         * บอก socketHandler ว่า
-         * "นี่คือการเริ่ม turn ใหม่"
-         *
-         * callback นี้จะสั่ง draw:clear
-         * แค่ครั้งเดียว
-         */
-        if (game.onTurnStart) {
-            game.onTurnStart(game)
-        }
-
-        /*
-         * ส่ง game state ปกติ
-         */
-        if (game.onPhaseChange) {
-            game.onPhaseChange(game)
-        }
-
-        /*
-         * Timer จบรอบ
-         */
-        game.timer = setTimeout(() => {
-            if (
-                game.phase !==
-                "draw-and-guess"
-            ) {
-                return
-            }
-
-            this.finishTurn(game)
-
-            /*
-             * หลังจบ turn ให้ส่ง state
-             * แต่ไม่ clear canvas ตรงนี้
-             */
-            if (game.onPhaseChange) {
-                game.onPhaseChange(game)
-            }
-        }, game.drawingTime * 1000)
-
-        /*
-         * เริ่มระบบ Hint
-         */
-        this.scheduleNextHint(game)
-
+    if (game.guessedPlayers.has(playerId)) {
         return {
             success: true,
-            game,
+            alreadyGuessed: true,
         }
     }
 
-    createHiddenHint(
-        word,
-        revealedIndexes
-    ) {
-        return word
-            .split("")
-            .map(
-                (
-                    character,
-                    index
-                ) => {
-                    if (
-                        character ===
-                        " "
-                    ) {
-                        return " "
-                    }
+    const rawGuess = String(guess || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, MAX_GUESS_LENGTH)
 
-                    if (
-                        revealedIndexes.has(
-                            index
-                        )
-                    ) {
-                        return character
-                    }
-
-                    return "_"
-                }
-            )
-            .join(" ")
+    if (!rawGuess) {
+        return {
+            success: false,
+            error: "EMPTY_GUESS",
+        }
     }
 
-    revealHintCharacters(game) {
-        if (!game) {
-            return false
+    if (!game.playerIds.includes(playerId)) {
+        return {
+            success: false,
+            error: "PLAYER_NOT_IN_GAME",
         }
-
-        const hiddenIndexes = []
-
-        for (
-            let index = 0;
-            index < game.word.length;
-            index++
-        ) {
-            const character =
-                game.word[index]
-
-            if (
-                character ===
-                " "
-            ) {
-                continue
-            }
-
-            if (
-                !game.revealedIndexes.has(
-                    index
-                )
-            ) {
-                hiddenIndexes.push(
-                    index
-                )
-            }
-        }
-
-        if (
-            hiddenIndexes.length ===
-            0
-        ) {
-            return false
-        }
-
-        const randomIndex =
-            Math.floor(
-                Math.random() *
-                hiddenIndexes.length
-            )
-
-        const index =
-            hiddenIndexes[
-            randomIndex
-            ]
-
-        game.revealedIndexes.add(
-            index
-        )
-
-        game.hint =
-            this.createHiddenHint(
-                game.word,
-                game.revealedIndexes
-            )
-
-        game.hintRevealed = true
-
-        return true
     }
 
-    scheduleNextHint(game) {
-        if (!game) {
-            return
-        }
-
-        if (
-            game.phase !==
-            "draw-and-guess"
-        ) {
-            return
-        }
-
-        if (game.hintTimer) {
-            clearTimeout(
-                game.hintTimer
-            )
-
-            game.hintTimer = null
-        }
-
-        /*
-         * เปิด hint ครบตามจำนวนที่กำหนดแล้ว
-         * ไม่เปิดเพิ่ม (กันคำตอบโผล่ทั้งคำ)
-         */
-        if (
-            game.revealedIndexes.size >=
-            game.maxHints
-        ) {
-            return
-        }
-
-        /*
-         * กระจาย hint เท่าๆ กันตลอดเวลาวาด
-         * เช่น เวลา 60s, hint 2 ตัว -> เปิดที่ 20s และ 40s
-         */
-        const hintDelay =
-            (game.drawingTime * 1000) /
-            (game.maxHints + 1)
-
-        game.hintTimer =
-            setTimeout(() => {
-                if (
-                    game.phase !==
-                    "draw-and-guess"
-                ) {
-                    return
-                }
-
-                const revealed =
-                    this.revealHintCharacters(
-                        game
-                    )
-
-                if (revealed) {
-                    /*
-                     * สำคัญ:
-                     *
-                     * ตรงนี้เรียกแค่
-                     * onPhaseChange
-                     *
-                     * ไม่มี draw:clear
-                     *
-                     * ดังนั้น Canvas จะไม่ reset
-                     */
-                    if (
-                        game.onPhaseChange
-                    ) {
-                        game.onPhaseChange(
-                            game
-                        )
-                    }
-                }
-
-                this.scheduleNextHint(
-                    game
-                )
-            }, hintDelay)
-    }
-
-    /*
-     * จำนวนตัวอักษรสูงสุดที่ hint จะเปิดให้
-     *
-     * ไม่เกินครึ่งคำ และต้องเหลือซ่อนอย่างน้อย 1 ตัวเสมอ
-     * เช่น cat -> 1, pizza -> 2, ice cream -> 4
-     */
-    getMaxHints(word) {
-        const letters =
-            word.replace(
-                /\s/g,
-                ""
-            ).length
-
-        return Math.max(
-            0,
-            Math.min(
-                Math.floor(
-                    letters / 2
-                ),
-                letters - 1
-            )
-        )
-    }
-
-    /*
-     * ตัดช่องว่างหัวท้าย / ช่องว่างซ้ำ และไม่สนตัวพิมพ์ใหญ่เล็ก
-     * "  Ice   Cream " -> "ice cream"
-     */
-    normalizeGuess(text) {
-        return String(
-            text || ""
-        )
-            .trim()
-            .replace(
-                /\s+/g,
-                " "
-            )
-            .toLowerCase()
-    }
-
-    submitGuess(
-        roomId,
-        playerId,
-        guess
-    ) {
-        const game =
-            this.games.get(roomId)
-
-        if (!game) {
-            return {
-                success: false,
-                error: "GAME_NOT_FOUND",
-            }
-        }
-
-        if (
-            game.phase !==
-            "draw-and-guess"
-        ) {
-            return {
-                success: false,
-                error: "NOT_DRAWING_PHASE",
-            }
-        }
-
-        if (
-            playerId ===
-            game.drawerId
-        ) {
-            return {
-                success: false,
-                error: "DRAWER_CANNOT_GUESS",
-            }
-        }
-
-        if (
-            game.guessedPlayers.has(
-                playerId
-            )
-        ) {
-            return {
-                success: true,
-                alreadyGuessed: true,
-            }
-        }
-
-        const rawGuess =
-            String(
-                guess || ""
-            )
-                .trim()
-                .replace(
-                    /\s+/g,
-                    " "
-                )
-                .slice(
-                    0,
-                    MAX_GUESS_LENGTH
-                )
-
-        if (!rawGuess) {
-            return {
-                success: false,
-                error: "EMPTY_GUESS",
-            }
-        }
-
-        if (
-            !game.playerIds.includes(
-                playerId
-            )
-        ) {
-            return {
-                success: false,
-                error: "PLAYER_NOT_IN_GAME",
-            }
-        }
-
-        const correct =
-            this.normalizeGuess(
-                rawGuess
-            ) ===
-            this.normalizeGuess(
-                game.word
-            )
-
-        if (!correct) {
-            const message = {
-                playerId,
-                guess: rawGuess,
-                correct: false,
-                timestamp:
-                    Date.now(),
-            }
-
-            game.guessMessages.push(
-                message
-            )
-
-            return {
-                success: true,
-                correct: false,
-                message,
-            }
-        }
-
-        game.guessedPlayers.add(
-            playerId
-        )
-
-        const points =
-            this.calculateGuessPoints(
-                game
-            )
-
-        game.scores[playerId] +=
-            points
-
-        /*
-         * คนวาดได้คะแนนทุกครั้งที่มีคนทายถูก
-         */
-        if (
-            Object.prototype.hasOwnProperty.call(
-                game.scores,
-                game.drawerId
-            )
-        ) {
-            game.scores[game.drawerId] +=
-                DRAWER_POINTS_PER_GUESS
-        }
-
-        /*
-         * ไม่เก็บคำตอบที่ถูกไว้ใน message
-         * กันคำตอบรั่วไปถึงผู้เล่นคนอื่น
-         */
+    if (normalizeGuess(rawGuess) !== normalizeGuess(game.word)) {
         const message = {
             playerId,
-            correct: true,
-            points,
-            timestamp:
-                Date.now(),
+            guess: rawGuess,
+            correct: false,
+            timestamp: now,
         }
 
-        game.guessMessages.push(
-            message
-        )
+        game.guessMessages.push(message)
 
         return {
             success: true,
-            correct: true,
+            correct: false,
             message,
-            points,
-            drawerPoints:
-                DRAWER_POINTS_PER_GUESS,
-            allGuessed:
-                this.haveAllGuessed(
-                    game
-                ),
         }
     }
 
-    haveAllGuessed(game) {
-        const guessers =
-            game.playerIds.filter(
-                (id) =>
-                    id !==
-                    game.drawerId
-            )
+    game.guessedPlayers.add(playerId)
 
-        return (
-            guessers.length > 0 &&
-            guessers.every(
-                (id) =>
-                    game.guessedPlayers.has(
-                        id
-                    )
-            )
-        )
-    }
+    const points = calculateGuessPoints(game, now)
 
-    calculateGuessPoints(game) {
-        const remaining =
-            Math.max(
-                1,
-                Math.ceil(
-                    (
-                        game.phaseEndsAt -
-                        Date.now()
-                    ) / 1000
-                )
-            )
+    game.scores[playerId] += points
 
-        return Math.max(
-            100,
-            remaining * 10
-        )
-    }
-
-    addStroke(
-        roomId,
-        playerId,
-        stroke
-    ) {
-        const game =
-            this.games.get(roomId)
-
-        if (!game) {
-            return {
-                success: false,
-                error: "GAME_NOT_FOUND",
-            }
-        }
-
-        if (
-            game.phase !==
-            "draw-and-guess"
-        ) {
-            return {
-                success: false,
-                error: "NOT_DRAWING_PHASE",
-            }
-        }
-
-        if (
-            game.drawerId !==
-            playerId
-        ) {
-            return {
-                success: false,
-                error: "NOT_DRAWER",
-            }
-        }
-
-        const sanitizedStroke =
-            this.sanitizeStroke(
-                stroke
-            )
-
-        if (!sanitizedStroke) {
-            return {
-                success: false,
-                error: "INVALID_STROKE",
-            }
-        }
-
-        if (
-            game.strokes.length >=
-            MAX_STROKES_PER_TURN
-        ) {
-            return {
-                success: false,
-                error: "TOO_MANY_STROKES",
-            }
-        }
-
-        game.strokes.push(
-            sanitizedStroke
-        )
-
-        return {
-            success: true,
-            stroke: sanitizedStroke,
-        }
-    }
-
-    sanitizeStroke(stroke) {
-        if (
-            !stroke ||
-            !Array.isArray(
-                stroke.points
-            ) ||
-            stroke.points.length < 2 ||
-            stroke.points.length >
-            MAX_POINTS_PER_STROKE
-        ) {
-            return null
-        }
-
-        const points = []
-
-        for (const point of stroke.points) {
-            const x = Number(point?.x)
-            const y = Number(point?.y)
-
-            if (
-                !Number.isFinite(x) ||
-                !Number.isFinite(y)
-            ) {
-                return null
-            }
-
-            points.push({
-                x: Math.min(1, Math.max(0, x)),
-                y: Math.min(1, Math.max(0, y)),
-            })
-        }
-
-        const color =
-            String(
-                stroke.color || ""
-            )
-
-        if (
-            !/^#[0-9a-fA-F]{6}$/.test(
-                color
-            )
-        ) {
-            return null
-        }
-
-        const size =
-            Number(stroke.size)
-
-        if (
-            !Number.isFinite(size)
-        ) {
-            return null
-        }
-
-        return {
-            points,
-            color,
-            size:
-                Math.min(
-                    MAX_BRUSH_SIZE,
-                    Math.max(1, size)
-                ),
-            mode:
-                stroke.mode ===
-                "erase"
-                    ? "erase"
-                    : "draw",
-        }
-    }
-
-    clearDrawing(
-        roomId,
-        playerId
-    ) {
-        const game =
-            this.games.get(roomId)
-
-        if (!game) {
-            return {
-                success: false,
-                error: "GAME_NOT_FOUND",
-            }
-        }
-
-        if (
-            game.phase !==
-            "draw-and-guess"
-        ) {
-            return {
-                success: false,
-                error: "NOT_DRAWING_PHASE",
-            }
-        }
-
-        if (
-            game.drawerId !==
-            playerId
-        ) {
-            return {
-                success: false,
-                error: "NOT_DRAWER",
-            }
-        }
-
-        game.strokes = []
-
-        return {
-            success: true,
-        }
-    }
-
-    finishTurn(game) {
-        if (!game) {
-            return
-        }
-
-        this.clearTimers(game)
-
-        this.startTurnAt(
-            game,
-            game.turnIndex + 1
-        )
+    /*
+     * คนวาดได้คะแนนทุกครั้งที่มีคนทายถูก
+     */
+    if (Object.prototype.hasOwnProperty.call(game.scores, game.drawerId)) {
+        game.scores[game.drawerId] += DRAWER_POINTS_PER_GUESS
     }
 
     /*
-     * เริ่ม turn ของผู้เล่นลำดับ turnIndex
-     *
-     * ถ้าเลยคนสุดท้ายแล้ว -> ขึ้น round ใหม่
-     * ถ้าครบทุก round แล้ว -> จบเกม
+     * ไม่เก็บคำตอบที่ถูกไว้ใน message
+     * กันคำตอบรั่วไปถึงผู้เล่นคนอื่น
      */
-    startTurnAt(
-        game,
-        turnIndex
-    ) {
-        if (
-            turnIndex >=
-            game.playerIds.length
-        ) {
-            turnIndex = 0
-
-            game.round += 1
-        }
-
-        if (
-            game.round >
-            game.totalRounds
-        ) {
-            game.round =
-                game.totalRounds
-
-            this.endGame(game)
-
-            return
-        }
-
-        game.turnIndex =
-            turnIndex
-
-        game.drawerId =
-            game.playerIds[
-            game.turnIndex
-            ]
-
-        this.startChooseWord(
-            game
-        )
+    const message = {
+        playerId,
+        correct: true,
+        points,
+        timestamp: now,
     }
 
-    endGame(game) {
-        this.clearTimers(game)
+    game.guessMessages.push(message)
 
-        game.phase =
-            "game-result"
+    return {
+        success: true,
+        correct: true,
+        message,
+        points,
+        drawerPoints: DRAWER_POINTS_PER_GUESS,
+        allGuessed: haveAllGuessed(game),
+    }
+}
 
-        game.word = ""
-        game.wordOptions = []
+function haveAllGuessed(game) {
+    const guessers = game.playerIds.filter((id) => id !== game.drawerId)
 
-        game.phaseEndsAt = 0
+    return (
+        guessers.length > 0 &&
+        guessers.every((id) => game.guessedPlayers.has(id))
+    )
+}
 
-        game.hint = ""
+function calculateGuessPoints(game, now = Date.now()) {
+    const remaining = Math.max(1, Math.ceil((game.phaseEndsAt - now) / 1000))
 
-        game.revealedIndexes =
-            new Set()
+    return Math.max(100, remaining * 10)
+}
 
-        game.hintRevealed =
-            false
-
-        game.strokes = []
+/*
+ * ตรวจ stroke จาก client
+ * คืน null ถ้าไม่ถูกต้อง
+ */
+function sanitizeStroke(stroke) {
+    if (
+        !stroke ||
+        !Array.isArray(stroke.points) ||
+        stroke.points.length < 2 ||
+        stroke.points.length > MAX_POINTS_PER_STROKE
+    ) {
+        return null
     }
 
-    removePlayer(
-        roomId,
-        playerId
-    ) {
-        const game =
-            this.games.get(roomId)
+    const points = []
 
-        if (!game) {
-            return {
-                changed: false,
-                game: null,
-            }
+    for (const point of stroke.points) {
+        const x = Number(point?.x)
+        const y = Number(point?.y)
+
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null
         }
 
-        const index =
-            game.playerIds.indexOf(
-                playerId
-            )
+        points.push({
+            x: Math.min(1, Math.max(0, x)),
+            y: Math.min(1, Math.max(0, y)),
+        })
+    }
 
-        if (index === -1) {
-            return {
-                changed: false,
-                game,
-            }
+    const color = String(stroke.color || "")
+
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+        return null
+    }
+
+    const size = Number(stroke.size)
+
+    if (!Number.isFinite(size)) {
+        return null
+    }
+
+    return {
+        points,
+        color,
+        size: Math.min(MAX_BRUSH_SIZE, Math.max(1, size)),
+        mode: stroke.mode === "erase" ? "erase" : "draw",
+    }
+}
+
+function finishTurn(game, now = Date.now()) {
+    startTurnAt(game, game.turnIndex + 1, now)
+}
+
+/*
+ * เริ่ม turn ของผู้เล่นลำดับ turnIndex
+ *
+ * ถ้าเลยคนสุดท้ายแล้ว -> ขึ้น round ใหม่
+ * ถ้าครบทุก round แล้ว -> จบเกม
+ */
+function startTurnAt(game, turnIndex, now = Date.now()) {
+    if (turnIndex >= game.playerIds.length) {
+        turnIndex = 0
+
+        game.round += 1
+    }
+
+    if (game.round > game.totalRounds) {
+        game.round = game.totalRounds
+
+        endGame(game)
+
+        return
+    }
+
+    game.turnIndex = turnIndex
+
+    game.drawerId = game.playerIds[game.turnIndex]
+
+    startChooseWord(game, now)
+}
+
+function endGame(game) {
+    game.phase = "game-result"
+
+    game.word = ""
+    game.wordOptions = []
+
+    game.phaseEndsAt = 0
+    game.nextHintAt = 0
+
+    game.hint = ""
+    game.revealedIndexes = new Set()
+}
+
+/*
+ * เอาผู้เล่นออกจากเกม
+ *
+ * คืน { changed, empty }
+ *   empty = ไม่เหลือผู้เล่นในเกมแล้ว (ผู้เรียกต้องลบเกม)
+ * ถ้าเกมจบเพราะเหลือคนน้อย game.phase จะเป็น "game-result"
+ */
+function removePlayer(game, playerId, now = Date.now()) {
+    const index = game.playerIds.indexOf(playerId)
+
+    if (index === -1) {
+        return {
+            changed: false,
+            empty: false,
         }
+    }
 
-        const wasDrawer =
-            game.drawerId ===
-            playerId
+    const wasDrawer = game.drawerId === playerId
 
-        /*
-         * เอา player ออกจาก game
-         */
-        game.playerIds.splice(
-            index,
-            1
-        )
+    game.playerIds.splice(index, 1)
 
-        delete game.scores[
-            playerId
-        ]
+    delete game.scores[playerId]
 
-        game.guessedPlayers.delete(
-            playerId
-        )
+    game.guessedPlayers.delete(playerId)
 
-        /*
-         * ไม่มีผู้เล่นเหลือ
-         */
-        if (
-            game.playerIds.length ===
-            0
-        ) {
-            this.deleteGame(
-                roomId
-            )
-
-            return {
-                changed: true,
-                game: null,
-            }
+    if (game.playerIds.length === 0) {
+        return {
+            changed: true,
+            empty: true,
         }
+    }
 
-        /*
-         * เกมจบไปแล้ว ไม่ต้องทำอะไรต่อ
-         */
-        if (
-            game.phase ===
-            "game-result"
-        ) {
-            return {
-                changed: true,
-                game,
-            }
+    if (game.phase === "game-result") {
+        return {
+            changed: true,
+            empty: false,
         }
+    }
 
-        /*
-         * เหลือผู้เล่นเพียง 1 คน
-         *
-         * จบเกมทันที
-         */
-        if (
-            game.playerIds.length ===
-            1
-        ) {
-            this.endGame(game)
-
-            return {
-                changed: true,
-                game,
-            }
-        }
-
-        if (wasDrawer) {
-            /*
-             * หลัง splice คนถัดไปจะเลื่อนมาอยู่ที่
-             * turnIndex เดิมพอดี
-             *
-             * startTurnAt จัดการขึ้น round ใหม่ / จบเกม ให้
-             * และเริ่ม choose-word ใหม่ ให้ drawer คนใหม่ได้เวลาเต็ม
-             */
-            this.clearTimers(game)
-
-            this.startTurnAt(
-                game,
-                game.turnIndex
-            )
-        } else {
-            /*
-             * ถ้า player ที่ออก
-             * อยู่ก่อน drawer
-             */
-            if (
-                index <
-                game.turnIndex
-            ) {
-                game.turnIndex -= 1
-            }
-
-            /*
-             * คนที่เหลือทายถูกครบแล้ว
-             * จบ turn เลย ไม่ต้องรอหมดเวลา
-             */
-            if (
-                game.phase ===
-                "draw-and-guess" &&
-                this.haveAllGuessed(
-                    game
-                )
-            ) {
-                this.finishTurn(game)
-            }
-        }
+    /*
+     * เหลือผู้เล่นเพียง 1 คน จบเกมทันที
+     */
+    if (game.playerIds.length === 1) {
+        endGame(game)
 
         return {
             changed: true,
-            game,
+            empty: false,
         }
     }
 
-    replacePlayerId(
-        game,
-        oldPlayerId,
-        newPlayerId
-    ) {
-        if (!game) {
-            return
+    if (wasDrawer) {
+        /*
+         * หลัง splice คนถัดไปจะเลื่อนมาอยู่ที่ turnIndex เดิมพอดี
+         *
+         * startTurnAt จัดการขึ้น round ใหม่ / จบเกม ให้
+         * และเริ่ม choose-word ใหม่ ให้ drawer คนใหม่ได้เวลาเต็ม
+         */
+        startTurnAt(game, game.turnIndex, now)
+    } else {
+        /*
+         * ถ้า player ที่ออกอยู่ก่อน drawer
+         */
+        if (index < game.turnIndex) {
+            game.turnIndex -= 1
         }
 
-        const index =
-            game.playerIds.indexOf(
-                oldPlayerId
-            )
-
-        if (index !== -1) {
-            game.playerIds[index] =
-                newPlayerId
-        }
-
-        if (
-            Object.prototype.hasOwnProperty.call(
-                game.scores,
-                oldPlayerId
-            )
-        ) {
-            game.scores[newPlayerId] =
-                game.scores[
-                oldPlayerId
-                ]
-
-            delete game.scores[
-                oldPlayerId
-            ]
-        }
-
-        if (
-            game.drawerId ===
-            oldPlayerId
-        ) {
-            game.drawerId =
-                newPlayerId
-        }
-
-        if (
-            game.guessedPlayers.has(
-                oldPlayerId
-            )
-        ) {
-            game.guessedPlayers.delete(
-                oldPlayerId
-            )
-
-            game.guessedPlayers.add(
-                newPlayerId
-            )
+        /*
+         * คนที่เหลือทายถูกครบแล้ว จบ turn เลย ไม่ต้องรอหมดเวลา
+         */
+        if (game.phase === "draw-and-guess" && haveAllGuessed(game)) {
+            finishTurn(game, now)
         }
     }
 
-    getPublicState(game) {
-        if (!game) {
-            return null
-        }
+    return {
+        changed: true,
+        empty: false,
+    }
+}
 
-        return {
-            roomId:
-                game.roomId,
+function replacePlayerId(game, oldPlayerId, newPlayerId) {
+    const index = game.playerIds.indexOf(oldPlayerId)
 
-            phase:
-                game.phase,
+    if (index !== -1) {
+        game.playerIds[index] = newPlayerId
+    }
 
-            turnId:
-                game.turnId,
+    if (Object.prototype.hasOwnProperty.call(game.scores, oldPlayerId)) {
+        game.scores[newPlayerId] = game.scores[oldPlayerId]
 
-            round:
-                game.round,
+        delete game.scores[oldPlayerId]
+    }
 
-            totalRounds:
-                game.totalRounds,
+    if (game.drawerId === oldPlayerId) {
+        game.drawerId = newPlayerId
+    }
 
-            /*
-             * ลำดับคนวาดใน round นี้ เช่น 2 / 4
-             */
-            turn:
-                game.turnIndex + 1,
+    if (game.guessedPlayers.has(oldPlayerId)) {
+        game.guessedPlayers.delete(oldPlayerId)
+        game.guessedPlayers.add(newPlayerId)
+    }
 
-            turnsPerRound:
-                game.playerIds.length,
-
-            drawerId:
-                game.drawerId,
-
-            phaseEndsAt:
-                game.phaseEndsAt,
-
-            /*
-             * เวลาของ server ตอนส่ง state
-             * client ใช้ชดเชยนาฬิกาเครื่องตัวเองที่อาจไม่ตรง
-             */
-            serverNow:
-                Date.now(),
-
-            hint:
-                game.hint,
-
-            scores:
-                game.scores,
-
-            wordLength:
-                game.word.replace(
-                    / /g,
-                    ""
-                ).length,
-
-            guessedPlayers:
-                Array.from(
-                    game.guessedPlayers
-                ),
+    for (const message of game.guessMessages) {
+        if (message.playerId === oldPlayerId) {
+            message.playerId = newPlayerId
         }
     }
 }
 
+/*
+ * ทำสิ่งที่ถึงเวลาแล้ว (แทน setTimeout เดิม)
+ *
+ * คืน true ถ้าเกมเปลี่ยน (ผู้เรียกต้อง save + ส่ง state)
+ */
+function tick(game, now = Date.now(), events = []) {
+    if (game.phase === "choose-word") {
+        /*
+         * หมดเวลาเลือกคำ -> เลือกคำแรกให้
+         */
+        if (now >= game.phaseEndsAt) {
+            selectWord(game, game.drawerId, game.wordOptions[0], now, events)
+
+            return true
+        }
+
+        return false
+    }
+
+    if (game.phase !== "draw-and-guess") {
+        return false
+    }
+
+    /*
+     * หมดเวลาวาด
+     */
+    if (now >= game.phaseEndsAt) {
+        finishTurn(game, now)
+
+        return true
+    }
+
+    /*
+     * ถึงเวลาเปิด hint
+     */
+    if (game.nextHintAt && now >= game.nextHintAt) {
+        revealHintCharacter(game)
+
+        scheduleNextHint(game, game.nextHintAt)
+
+        return true
+    }
+
+    return false
+}
+
+/*
+ * เวลาที่เกมต้องเปลี่ยนสถานะครั้งถัดไป (null = ไม่มี)
+ */
+function getNextDeadline(game) {
+    if (game.phase === "choose-word") {
+        return game.phaseEndsAt
+    }
+
+    if (game.phase === "draw-and-guess") {
+        return game.nextHintAt
+            ? Math.min(game.phaseEndsAt, game.nextHintAt)
+            : game.phaseEndsAt
+    }
+
+    return null
+}
+
+function getPublicState(game) {
+    return {
+        roomId: game.roomId,
+
+        phase: game.phase,
+
+        turnId: game.turnId,
+
+        round: game.round,
+
+        totalRounds: game.totalRounds,
+
+        /*
+         * ลำดับคนวาดใน round นี้ เช่น 2 / 4
+         */
+        turn: game.turnIndex + 1,
+
+        turnsPerRound: game.playerIds.length,
+
+        drawerId: game.drawerId,
+
+        phaseEndsAt: game.phaseEndsAt,
+
+        /*
+         * เวลาของ server ตอนส่ง state
+         * client ใช้ชดเชยนาฬิกาเครื่องตัวเองที่อาจไม่ตรง
+         */
+        serverNow: Date.now(),
+
+        hint: game.hint,
+
+        scores: game.scores,
+
+        wordLength: game.word.replace(/ /g, "").length,
+
+        guessedPlayers: Array.from(game.guessedPlayers),
+    }
+}
+
+/*
+ * แปลง Set <-> array สำหรับเก็บเป็น JSON
+ */
+function serializeGame(game) {
+    return {
+        ...game,
+        usedWords: Array.from(game.usedWords),
+        guessedPlayers: Array.from(game.guessedPlayers),
+        revealedIndexes: Array.from(game.revealedIndexes),
+    }
+}
+
+function deserializeGame(data) {
+    if (!data) {
+        return null
+    }
+
+    return {
+        ...data,
+        usedWords: new Set(data.usedWords),
+        guessedPlayers: new Set(data.guessedPlayers),
+        revealedIndexes: new Set(data.revealedIndexes),
+    }
+}
+
 module.exports = {
-    GameManager,
+    MAX_STROKES_PER_TURN,
+
+    createGame,
+    selectWord,
+    submitGuess,
+    sanitizeStroke,
+    finishTurn,
+    removePlayer,
+    replacePlayerId,
+    tick,
+    getNextDeadline,
+    getPublicState,
+    serializeGame,
+    deserializeGame,
+
+    // ใช้ในการทดสอบ
+    getMaxHints,
+    normalizeGuess,
 }

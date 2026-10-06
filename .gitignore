@@ -27,3 +27,21 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# AWS / Secrets (ห้ามขึ้น git เด็ดขาด)
+*.pem
+*accessKeys*.csv
+*credentials*.csv
+
+# Deploy artifacts
+*.zip
+*.tar.gz
+
+# Logs / local data
+*.log
+logs/
+dump.rdb
+
+# Local tool settings
+.claude/settings.local.json
+Thumbs.db

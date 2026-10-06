@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
+import PlayerAvatar from "../components/PlayerAvatar";
 import socket, { clearSession, resumeSession } from "../socket";
 
 const EMPTY_PLAYERS = [];
@@ -126,13 +127,11 @@ function Result() {
                         #{index + 1}
                       </div>
 
-                      <div
-                        className="grid h-12 w-12 shrink-0 place-items-center rounded-full text-xl"
-                        style={{
-                          backgroundColor: player.avatar?.furColor || "#d4d4d4",
-                        }}
-                      >
-                        🐱
+                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border-2 border-black bg-[#f6f6f6]">
+                        <PlayerAvatar
+                          avatar={player.avatar}
+                          className="h-full w-full"
+                        />
                       </div>
 
                       <div className="min-w-0 flex-1">
