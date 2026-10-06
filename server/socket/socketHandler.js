@@ -28,6 +28,44 @@ const roomService =
 const gameManager =
     new GameManager()
 
+/*
+ * จำกัดการทาย: ไม่เกิน GUESS_LIMIT ครั้ง ภายใน GUESS_WINDOW ms
+ */
+const GUESS_LIMIT = 5
+
+const GUESS_WINDOW = 3000
+
+function isGuessRateLimited(
+    socket
+) {
+    const now = Date.now()
+
+    const recentGuesses = (
+        socket.data.guessTimes || []
+    ).filter(
+        (time) =>
+            now - time <
+            GUESS_WINDOW
+    )
+
+    if (
+        recentGuesses.length >=
+        GUESS_LIMIT
+    ) {
+        socket.data.guessTimes =
+            recentGuesses
+
+        return true
+    }
+
+    recentGuesses.push(now)
+
+    socket.data.guessTimes =
+        recentGuesses
+
+    return false
+}
+
 const RECONNECT_GRACE_TIME =
     15000
 
@@ -1958,6 +1996,25 @@ function registerSocketHandlers(
                         socket.data.roomId
 
                     if (!roomId) {
+                        return
+                    }
+
+                    if (
+                        isGuessRateLimited(
+                            socket
+                        )
+                    ) {
+                        socket.emit(
+                            "guessResult",
+                            {
+                                correct:
+                                    false,
+
+                                error:
+                                    "TOO_MANY_GUESSES",
+                            }
+                        )
+
                         return
                     }
 

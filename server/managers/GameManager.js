@@ -1289,6 +1289,13 @@ class GameManager {
             phaseEndsAt:
                 game.phaseEndsAt,
 
+            /*
+             * เวลาของ server ตอนส่ง state
+             * client ใช้ชดเชยนาฬิกาเครื่องตัวเองที่อาจไม่ตรง
+             */
+            serverNow:
+                Date.now(),
+
             hint:
                 game.hint,
 

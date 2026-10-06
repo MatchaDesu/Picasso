@@ -16,6 +16,7 @@ const GUESS_ERROR_MESSAGES = {
   DRAWER_CANNOT_GUESS: "The artist can't guess.",
   PLAYER_NOT_IN_GAME: "You are watching this game.",
   EMPTY_GUESS: "Type a guess first.",
+  TOO_MANY_GUESSES: "Slow down! Too many guesses.",
 };
 
 function makeSystemMessage(text) {
@@ -51,6 +52,9 @@ function Game() {
   const [guessMessage, setGuessMessage] = useState("");
   const [chatMessages, setChatMessages] = useState([]);
   const [now, setNow] = useState(() => Date.now());
+
+  // serverTime - clientTime (ms) กัน timer เพี้ยนเมื่อนาฬิกาเครื่องไม่ตรงกับ server
+  const [clockOffset, setClockOffset] = useState(0);
   const [connected, setConnected] = useState(socket.connected);
   const [turnId, setTurnId] = useState(null);
 
@@ -166,7 +170,7 @@ function Game() {
   const phaseEndsAt = gameState?.phaseEndsAt || 0;
 
   const timeLeft = phaseEndsAt
-    ? Math.max(0, Math.ceil((phaseEndsAt - now) / 1000))
+    ? Math.max(0, Math.ceil((phaseEndsAt - (now + clockOffset)) / 1000))
     : 0;
 
   useEffect(() => {
@@ -273,6 +277,13 @@ function Game() {
       }
 
       const nextGameState = state.game || state;
+
+      if (nextGameState.serverNow) {
+        const clientNow = Date.now();
+
+        setClockOffset(nextGameState.serverNow - clientNow);
+        setNow(clientNow);
+      }
 
       gameStateRef.current = nextGameState;
       setGameState(nextGameState);
