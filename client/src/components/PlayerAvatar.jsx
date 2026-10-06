@@ -1,4 +1,4 @@
-import { getAvatarLayers } from "../avatarParts";
+import { getAvatarLayers } from "../constants/avatarParts";
 
 /*
  * วาด avatar แมวจากชิ้นส่วน SVG

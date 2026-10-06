@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import socket from "../socket";
+import socket from "../services/socket";
 
 function Footer() {
   // server เครื่องที่ต่ออยู่ (ใช้ดูตอนมีหลายเครื่องหลัง Load Balancer)

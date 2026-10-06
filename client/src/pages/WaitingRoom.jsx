@@ -6,12 +6,12 @@ import Header from "../components/Header";
 import Footer from "../components/Footer";
 import PlayerAvatar from "../components/PlayerAvatar";
 import RoomSettingsForm from "../components/RoomSettingsForm";
-import { DEFAULT_SETTINGS_OPTIONS } from "../roomSettings";
+import { DEFAULT_SETTINGS_OPTIONS } from "../constants/roomSettings";
 import socket, {
   clearSession,
   isResumeRetrying,
   resumeSession,
-} from "../socket";
+} from "../services/socket";
 
 function WaitingRoom() {
   const navigate = useNavigate();

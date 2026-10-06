@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
 import PlayerAvatar from "../components/PlayerAvatar";
-import socket, { clearSession, resumeSession } from "../socket";
+import socket, { clearSession, resumeSession } from "../services/socket";
 
 const EMPTY_PLAYERS = [];
 const EMPTY_SCORES = {};

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { login, register } from "../auth";
+import { login, register } from "../services/auth";
 
 const ERROR_MESSAGES = {
   INVALID_USERNAME: "Username must be 3–20 letters, numbers or _.",

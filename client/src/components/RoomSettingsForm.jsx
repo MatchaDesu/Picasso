@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS_OPTIONS } from "../roomSettings";
+import { DEFAULT_SETTINGS_OPTIONS } from "../constants/roomSettings";
 
 function SettingRow({ label, options, value, disabled, onChange }) {
   return (

@@ -7,8 +7,8 @@ import ArtistName from "../components/ArtistName";
 import JoinRoom from "../components/JoinRoom";
 import Leaderboard from "../components/Leaderboard";
 import Footer from "../components/Footer";
-import socket, { saveSession } from "../socket";
-import { DEFAULT_AVATAR } from "../avatarParts";
+import socket, { saveSession } from "../services/socket";
+import { DEFAULT_AVATAR } from "../constants/avatarParts";
 
 
 // รอ server ตอบนานสุดเท่านี้ ก่อนปลดปุ่มและบอกให้ลองใหม่

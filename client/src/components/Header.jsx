@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import PicassoLogo from "../assets/Picasso.png"
 
 import AuthModal from "./AuthModal";
-import { logout, useAuthUser } from "../auth";
+import { logout, useAuthUser } from "../services/auth";
 
 function Header() {
   const user = useAuthUser();

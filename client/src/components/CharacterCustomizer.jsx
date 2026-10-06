@@ -4,7 +4,7 @@ import {
   BODY_OPTIONS,
   EAR_OPTIONS,
   normalizeAvatar,
-} from "../avatarParts";
+} from "../constants/avatarParts";
 
 function OptionButton({ selected, onClick, children }) {
   return (

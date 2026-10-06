@@ -8,8 +8,8 @@ import RoomSettingsForm from "../components/RoomSettingsForm";
 import {
   DEFAULT_ROOM_SETTINGS,
   DEFAULT_SETTINGS_OPTIONS,
-} from "../roomSettings";
-import socket, { saveSession } from "../socket";
+} from "../constants/roomSettings";
+import socket, { saveSession } from "../services/socket";
 
 function CreateRoom() {
   const navigate = useNavigate();

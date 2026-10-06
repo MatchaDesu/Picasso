@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import socket from "../socket";
+import socket from "../services/socket";
 
 const COLORS = [
   "#000000",

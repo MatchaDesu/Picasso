@@ -33,7 +33,7 @@ const ROOM_ID_PATTERN = /^[A-Z0-9]{4,12}$/
 const MAX_NAME_LENGTH = 20
 
 /*
- * ชิ้นส่วน avatar ที่มี (ต้องตรงกับ client/src/avatarParts.js)
+ * ชิ้นส่วน avatar ที่มี (ต้องตรงกับ client/src/constants/avatarParts.js)
  */
 const AVATAR_OPTIONS = {
     body: ["Orange", "Black", "White", "Calico", "Cow"],

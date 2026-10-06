@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import socket, { saveSession } from "../socket";
+import socket, { saveSession } from "../services/socket";
 
 function BrowseRoom() {
   const navigate = useNavigate();

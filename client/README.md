@@ -31,12 +31,14 @@ npm run dev
 
 ```
 src/
-├── pages/          หน้าหลัก: Home, CreateRoom, BrowseRoom, WaitingRoom, Game, Result
-├── components/     DrawingBoard, PlayerAvatar, CharacterCustomizer, AuthModal, ...
-├── socket.js       การเชื่อมต่อ Socket.IO + session สำหรับกลับเข้าห้องเดิม
-├── auth.js         Login / Register / token
-├── avatarParts.js  ชิ้นส่วน avatar แมว (SVG ใน public/avatars)
-└── roomSettings.js ค่าเริ่มต้นการตั้งค่าห้อง
+├── pages/              หน้าหลัก: Home, CreateRoom, BrowseRoom, WaitingRoom, Game, Result
+├── components/         DrawingBoard, PlayerAvatar, CharacterCustomizer, AuthModal, ...
+├── services/           ส่วนที่คุยกับ server
+│   ├── socket.js       การเชื่อมต่อ Socket.IO + session สำหรับกลับเข้าห้องเดิม
+│   └── auth.js         Login / Register / token
+└── constants/          ข้อมูลและค่าตั้งต้น
+    ├── avatarParts.js  ชิ้นส่วน avatar แมว (SVG ใน public/avatars) และตำแหน่งแต่ละชิ้น
+    └── roomSettings.js ค่าเริ่มต้นการตั้งค่าห้อง
 ```
 
 ## คำสั่ง

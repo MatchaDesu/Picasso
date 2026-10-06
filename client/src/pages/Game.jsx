@@ -10,7 +10,7 @@ import socket, {
   clearSession,
   isResumeRetrying,
   resumeSession,
-} from "../socket";
+} from "../services/socket";
 
 const GUESS_ERROR_MESSAGES = {
   NOT_DRAWING_PHASE: "Wait for the drawing round.",
