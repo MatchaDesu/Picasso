@@ -145,6 +145,10 @@ class MemoryStore {
         )
     }
 
+    async ping() {
+        return true
+    }
+
     async close() {}
 }
 

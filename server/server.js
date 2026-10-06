@@ -28,10 +28,61 @@ const INSTANCE_ID = `${os.hostname()}-${crypto.randomBytes(3).toString("hex")}`
 
 const PORT = process.env.PORT || 3000
 
+const IS_PRODUCTION = process.env.NODE_ENV === "production"
+
+const DEV_AUTH_SECRET = "picasso-dev-secret"
+
+const MIN_AUTH_SECRET_LENGTH = 32
+
 /*
  * ต้องตรงกับ AUTH_SECRET ของ Auth Lambda
+ * dev ไม่ตั้งได้ (ใช้ค่าสำรอง) แต่ production ต้องตั้งเสมอ
  */
-const AUTH_SECRET = process.env.AUTH_SECRET || "picasso-dev-secret"
+const AUTH_SECRET = process.env.AUTH_SECRET || DEV_AUTH_SECRET
+
+/*
+ * เช็คค่าที่ตั้งผิดแล้วระบบดูเหมือนทำงานได้ แต่จริงๆ พัง/ไม่ปลอดภัย
+ * คืนรายการปัญหา (ว่าง = ผ่าน)
+ */
+function validateConfig() {
+  const problems = []
+
+  const secret = process.env.AUTH_SECRET || ""
+
+  if (IS_PRODUCTION) {
+    // ค่าสำรองอยู่ในโค้ดบน GitHub ใครก็ปลอม token ได้
+    if (!secret || secret === DEV_AUTH_SECRET || secret === "CHANGE-ME") {
+      problems.push(
+        "AUTH_SECRET is not set (or still the placeholder). Generate one with: " +
+          "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+      )
+    } else if (secret.length < MIN_AUTH_SECRET_LENGTH) {
+      problems.push(
+        `AUTH_SECRET is too short (${secret.length} chars, need at least ${MIN_AUTH_SECRET_LENGTH}).`
+      )
+    }
+  }
+
+  /*
+   * รันใน Auto Scaling Group แต่ไม่มี Redis
+   * -> แต่ละเครื่องเก็บห้องแยกกัน ผู้เล่นคนละเครื่องไม่เห็นห้องกัน
+   */
+  if (process.env.ASG_NAME && !process.env.REDIS_URL) {
+    problems.push(
+      "ASG_NAME is set but REDIS_URL is not. Multiple instances need a shared Redis (ElastiCache)."
+    )
+  }
+
+  return problems
+}
+
+const configProblems = validateConfig()
+
+if (configProblems.length > 0) {
+  console.error("Invalid configuration:")
+  configProblems.forEach((problem) => console.error(`  - ${problem}`))
+  process.exit(1)
+}
 
 if (!process.env.AUTH_SECRET) {
   console.warn("AUTH_SECRET is not set. Using an insecure development secret.")
@@ -73,13 +124,32 @@ async function main() {
   })
 
   /*
-   * Health check สำหรับ Load Balancer / ECS
+   * Health check สำหรับ Load Balancer
+   *
+   * เช็ค Redis ด้วย ถ้า Redis ล่ม/ต่อไม่ได้ ตอบ 503
+   * ALB จะได้หยุดส่งผู้เล่นมาที่เครื่องนี้
    */
-  app.get("/health", (req, res) => {
-    res.json({
-      ok: true,
+  const HEALTH_CHECK_TIMEOUT = 2000
+
+  app.get("/health", async (req, res) => {
+    let storeOk = false
+
+    try {
+      storeOk = await Promise.race([
+        store.ping(),
+        new Promise((resolve) =>
+          setTimeout(() => resolve(false), HEALTH_CHECK_TIMEOUT)
+        ),
+      ])
+    } catch {
+      storeOk = false
+    }
+
+    res.status(storeOk ? 200 : 503).json({
+      ok: storeOk,
       instanceId: INSTANCE_ID,
       store: adapter ? "redis" : "memory",
+      storeOk,
       connections: io.engine.clientsCount,
     })
   })

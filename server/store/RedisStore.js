@@ -108,6 +108,10 @@ class RedisStore {
         return values.map((value) => JSON.parse(value))
     }
 
+    async ping() {
+        return (await this.client.ping()) === "PONG"
+    }
+
     async close() {
         await this.client.quit()
     }

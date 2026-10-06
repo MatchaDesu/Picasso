@@ -119,6 +119,11 @@ async function postAuth(path, body) {
     throw new AuthError("NETWORK_ERROR");
   }
 
+  // API Gateway throttling (ลองถี่เกินไป)
+  if (response.status === 429) {
+    throw new AuthError("TOO_MANY_REQUESTS");
+  }
+
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {

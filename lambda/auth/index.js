@@ -22,8 +22,33 @@ const { promisify } = require("util")
 const scrypt = promisify(crypto.scrypt)
 
 const USERS_TABLE = process.env.USERS_TABLE
-const AUTH_SECRET = process.env.AUTH_SECRET || "picasso-dev-secret"
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*"
+
+const DEV_AUTH_SECRET = "picasso-dev-secret"
+const MIN_AUTH_SECRET_LENGTH = 32
+
+// Lambda ตั้งค่านี้ให้เอง = รันบน AWS จริง (ไม่ใช่ local-server.js)
+const IS_LAMBDA = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME)
+
+/*
+ * บน AWS ต้องตั้ง AUTH_SECRET เสมอ
+ * ค่าสำรองอยู่ในโค้ดบน GitHub ใครก็ปลอม token ได้
+ */
+if (IS_LAMBDA) {
+    const secret = process.env.AUTH_SECRET || ""
+
+    if (
+        !secret ||
+        secret === DEV_AUTH_SECRET ||
+        secret.length < MIN_AUTH_SECRET_LENGTH
+    ) {
+        throw new Error(
+            `AUTH_SECRET must be set to a random value of at least ${MIN_AUTH_SECRET_LENGTH} characters (same value as the game server).`
+        )
+    }
+}
+
+const AUTH_SECRET = process.env.AUTH_SECRET || DEV_AUTH_SECRET
 
 const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
 

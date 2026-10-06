@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import Header from "../components/Header";
@@ -11,6 +11,9 @@ import socket, { saveSession } from "../socket";
 import { DEFAULT_AVATAR } from "../avatarParts";
 
 
+// รอ server ตอบนานสุดเท่านี้ ก่อนปลดปุ่มและบอกให้ลองใหม่
+const ROOM_REQUEST_TIMEOUT = 8000;
+
 const ROOM_ERROR_MESSAGES = {
   ROOM_NOT_FOUND: "Room not found. Check the code and try again.",
   ROOM_FULL: "That room is full.",
@@ -18,6 +21,8 @@ const ROOM_ERROR_MESSAGES = {
   INVALID_ROOM_ID: "Room codes are 4–12 letters or numbers.",
   ALREADY_IN_ROOM: "You are already in a room.",
   QUICK_MATCH_FAILED: "Could not find a room. Please try again.",
+  NOT_CONNECTED: "Not connected to the game server yet. Please wait a moment and try again.",
+  TIMEOUT: "The server did not respond. Please try again.",
 };
 
 function Home() {
@@ -33,6 +38,8 @@ function Home() {
   const [pendingAction, setPendingAction] = useState(null);
 
   const [roomError, setRoomError] = useState("");
+
+  const requestTimerRef = useRef(null);
 
   useEffect(() => {
     function handlePlayerProfile(profile) {
@@ -60,6 +67,7 @@ function Home() {
    */
   useEffect(() => {
     function handleEnteredRoom(room) {
+      clearTimeout(requestTimerRef.current);
       setPendingAction(null);
 
       saveSession({
@@ -76,6 +84,7 @@ function Home() {
     }
 
     function handleRoomError(data) {
+      clearTimeout(requestTimerRef.current);
       setPendingAction(null);
 
       setRoomError(
@@ -94,22 +103,43 @@ function Home() {
     };
   }, [navigate]);
 
-  function handleQuickMatch() {
+  // ออกจากหน้านี้ไปแล้ว ไม่ต้องจับเวลาต่อ
+  useEffect(() => () => clearTimeout(requestTimerRef.current), []);
+
+  /*
+   * ส่งคำขอเข้าห้อง
+   * - ยังไม่ได้ต่อ server -> บอกทันที ไม่ส่ง (เดิมปุ่มค้างตลอดไป)
+   * - server ไม่ตอบภายใน 8 วินาที -> ปลดปุ่ม ให้ลองใหม่ได้
+   */
+  function sendRoomRequest(action, event, payload) {
     if (pendingAction) {
       return;
     }
 
-    setRoomError("");
-    setPendingAction("quick");
+    if (!socket.connected) {
+      setRoomError(ROOM_ERROR_MESSAGES.NOT_CONNECTED);
+      return;
+    }
 
-    socket.emit("quickMatch");
+    setRoomError("");
+    setPendingAction(action);
+
+    socket.emit(event, payload);
+
+    clearTimeout(requestTimerRef.current);
+
+    requestTimerRef.current = setTimeout(() => {
+      setPendingAction(null);
+      setRoomError(ROOM_ERROR_MESSAGES.TIMEOUT);
+    }, ROOM_REQUEST_TIMEOUT);
+  }
+
+  function handleQuickMatch() {
+    sendRoomRequest("quick", "quickMatch");
   }
 
   function handleJoinWithCode(code) {
-    setRoomError("");
-    setPendingAction("join");
-
-    socket.emit("joinRoom", code);
+    sendRoomRequest("join", "joinRoom", code);
   }
 
   function handleArtistNameChange(name) {

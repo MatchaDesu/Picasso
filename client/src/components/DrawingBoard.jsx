@@ -16,12 +16,28 @@ const COLORS = [
 
 const BRUSH_SIZES = [4, 8, 14, 22];
 
+/*
+ * ส่ง stroke ไป server เป็นชุด ไม่ส่งทุก pointermove
+ * (เมาส์/จอ refresh สูงยิง event เกิน 100 ครั้ง/วินาที
+ *  server จำกัดไว้ 60 ครั้ง/วินาที ส่งถี่กว่านั้นจะโดนทิ้ง ภาพขาด)
+ *
+ * รวมจุดไว้แล้วส่งทุก STROKE_SEND_INTERVAL ms (สูงสุด 50 ครั้ง/วินาที)
+ * หรือเมื่อจุดครบ MAX_POINTS_PER_BATCH (server รับได้ไม่เกิน 50 จุด/stroke)
+ */
+const STROKE_SEND_INTERVAL = 20;
+const MAX_POINTS_PER_BATCH = 40;
+
 function DrawingBoard({ disabled = false }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef(null);
+
+  // stroke ที่วาดในเครื่องแล้วแต่ยังไม่ได้ส่ง
+  const pendingStrokeRef = useRef(null);
+  const lastSentAtRef = useRef(0);
+  const flushTimerRef = useRef(null);
 
   // เก็บสถานะ canvas ปัจจุบันไว้
   // เพื่อไม่ให้ React/game state ทำให้ภาพหาย
@@ -254,23 +270,67 @@ function DrawingBoard({ disabled = false }) {
       return;
     }
 
-    const points = [lastPoint, point];
+    // วาด local ทันที (ไม่ต้องรอส่ง)
+    drawLine([lastPoint, point], color, brushSize, mode);
 
-    // วาด local ก่อน
-    drawLine(points, color, brushSize, mode);
-
-    // ส่งไป server
-    socket.emit("draw:stroke", {
-      points,
-      color,
-      size: brushSize,
-      mode,
-    });
+    queueStrokePoint(lastPoint, point);
 
     lastPointRef.current = point;
   }
 
+  /*
+   * เพิ่มจุดเข้าชุดที่รอส่ง แล้วส่งเมื่อถึงเวลา / จุดเต็ม
+   */
+  function queueStrokePoint(fromPoint, toPoint) {
+    if (!pendingStrokeRef.current) {
+      pendingStrokeRef.current = {
+        points: [fromPoint],
+        color,
+        size: brushSize,
+        mode,
+      };
+    }
+
+    const pending = pendingStrokeRef.current;
+
+    pending.points.push(toPoint);
+
+    const now = Date.now();
+
+    if (
+      now - lastSentAtRef.current >= STROKE_SEND_INTERVAL ||
+      pending.points.length >= MAX_POINTS_PER_BATCH
+    ) {
+      flushStroke();
+      return;
+    }
+
+    // จุดสุดท้ายที่ค้างอยู่ ส่งตามไปเองถ้าไม่มี event ใหม่
+    if (!flushTimerRef.current) {
+      flushTimerRef.current = setTimeout(flushStroke, STROKE_SEND_INTERVAL);
+    }
+  }
+
+  function flushStroke() {
+    clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = null;
+
+    const pending = pendingStrokeRef.current;
+
+    pendingStrokeRef.current = null;
+
+    if (!pending || pending.points.length < 2) {
+      return;
+    }
+
+    socket.emit("draw:stroke", pending);
+
+    lastSentAtRef.current = Date.now();
+  }
+
   function handlePointerUp(event) {
+    flushStroke();
+
     isDrawingRef.current = false;
     lastPointRef.current = null;
 
@@ -290,6 +350,11 @@ function DrawingBoard({ disabled = false }) {
     if (disabled) {
       return;
     }
+
+    // ทิ้งเส้นที่ยังไม่ได้ส่ง ไม่ให้โผล่หลังล้างกระดาน
+    clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = null;
+    pendingStrokeRef.current = null;
 
     clearCanvas();
 

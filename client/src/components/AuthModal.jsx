@@ -8,6 +8,7 @@ const ERROR_MESSAGES = {
   USERNAME_TAKEN: "This username is already taken.",
   INVALID_CREDENTIALS: "Wrong username or password.",
   NETWORK_ERROR: "Cannot reach the server. Please try again.",
+  TOO_MANY_REQUESTS: "Too many attempts. Please wait a moment and try again.",
 };
 
 function AuthModal({ onClose }) {

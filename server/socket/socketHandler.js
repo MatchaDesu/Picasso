@@ -54,6 +54,14 @@ const GUESS_LIMIT = 5
 const GUESS_WINDOW = 3000
 
 /*
+ * จำกัด stroke: ไม่เกิน STROKE_LIMIT ครั้งต่อวินาที (เกินแล้วทิ้ง)
+ * client รวมจุดแล้วส่งไม่เกิน 50 ครั้ง/วินาที (DrawingBoard.jsx)
+ * กัน client ที่ตั้งใจส่งรัวๆ ทำให้ Redis และทั้งห้องหนัก
+ */
+const STROKE_LIMIT = 60
+const STROKE_WINDOW = 1000
+
+/*
  * ------------------------------------------------
  * Serialize (ส่งให้ client)
  * ------------------------------------------------
@@ -160,6 +168,25 @@ function normalizeRoomId(roomId) {
     return String(roomId || "")
         .trim()
         .toUpperCase()
+}
+
+/*
+ * นับแบบหน้าต่างคงที่ (ถูกและเร็ว เหมาะกับ event ถี่ๆ อย่าง stroke)
+ */
+function isStrokeRateLimited(socket) {
+    const now = Date.now()
+
+    if (
+        !socket.data.strokeWindowStart ||
+        now - socket.data.strokeWindowStart >= STROKE_WINDOW
+    ) {
+        socket.data.strokeWindowStart = now
+        socket.data.strokeCount = 0
+    }
+
+    socket.data.strokeCount += 1
+
+    return socket.data.strokeCount > STROKE_LIMIT
 }
 
 function isGuessRateLimited(socket) {
@@ -1321,6 +1348,11 @@ function registerSocketHandlers(
             const roomId = socket.data.roomId
 
             if (!roomId) {
+                return
+            }
+
+            // เช็คก่อนแตะ Redis
+            if (isStrokeRateLimited(socket)) {
                 return
             }
 

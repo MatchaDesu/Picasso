@@ -137,6 +137,28 @@ API Gateway > Create API > **HTTP API** > Integration: Lambda `picasso-auth`
 curl -X POST https://abc123.execute-api.ap-southeast-1.amazonaws.com/auth/register -H "Content-Type: application/json" -d "{\"username\":\"test01\",\"password\":\"secret123\"}"
 ```
 
+### 4.3 Throttling (กันเดารหัสผ่าน / ยิง API รัวๆ)
+
+ไม่ตั้งไว้ คนสามารถยิง `/auth/login` เดารหัสผ่านได้ไม่จำกัด (และเปลือง Lambda)
+
+API Gateway > เลือก API > **Protect > Throttling**
+
+| ตั้งที่ | Burst limit | Rate limit (ครั้ง/วินาที) |
+|---|---|---|
+| **Default route throttling** (ทุก route) | 20 | 10 |
+| `POST /auth/login` (Edit route throttling) | 10 | 5 |
+| `POST /auth/register` | 10 | 5 |
+
+เกินแล้ว API Gateway ตอบ **429 Too Many Requests** หน้าเว็บจะขึ้นว่า "Too many attempts. Please wait a moment and try again."
+
+หรือตั้งด้วย AWS CLI (รันใน Git Bash / Linux / macOS):
+```bash
+aws apigatewayv2 update-stage --api-id <api-id> --stage-name '$default' --default-route-settings ThrottlingBurstLimit=20,ThrottlingRateLimit=10 --route-settings '{"POST /auth/login":{"ThrottlingBurstLimit":10,"ThrottlingRateLimit":5},"POST /auth/register":{"ThrottlingBurstLimit":10,"ThrottlingRateLimit":5}}'
+```
+
+> ข้อจำกัด: throttling ของ HTTP API นับรวมทุกคน ไม่ได้แยกตาม IP (คนยิงรัวๆ คนเดียวทำให้คนอื่น login ช้าไปด้วยช่วงสั้นๆ)
+> ถ้าต้องการจำกัดต่อ IP ต้องใช้ REST API + AWS WAF (rate-based rule) ซึ่ง HTTP API ใช้ WAF ไม่ได้ สำหรับงานนี้แบบข้างบนเพียงพอ
+
 ## 5. ElastiCache (Redis / Valkey)
 
 ElastiCache > Create cache > **Valkey** (หรือ Redis OSS) > **Design your own cache** > **Cluster cache** แต่ **Cluster mode: Disabled**
@@ -341,6 +363,7 @@ aws autoscaling put-scaling-policy --auto-scaling-group-name picasso-asg --polic
 | server ขึ้นแต่ต่อ Redis ไม่ได้ | `picasso-redis-sg` เปิด 6379 จาก `picasso-ec2-sg` หรือยัง, `REDIS_URL` ถูกไหม (`redis://` vs `rediss://`) |
 | หน้าเว็บต่อ socket ไม่ได้ | build ด้วย `-SocketUrl` ถูกไหม, ALB listener / security group เปิด 80 หรือยัง |
 | Login ขึ้น Cannot reach the server | CORS ของ API Gateway มี origin ของหน้าเว็บหรือยัง |
+| Login ขึ้น Too many attempts ทั้งที่กดไม่กี่ครั้ง | Throttling ตั้งต่ำเกินไป (ข้อ 4.3) หรือมีคนยิง API อยู่ ดู metric `4xx` ของ API Gateway ใน CloudWatch |
 | Login ได้แต่ในเกมยังเป็น guest | `AUTH_SECRET` ของ Lambda กับ EC2 ไม่ตรงกัน |
 | Leaderboard ว่างตลอด | ต้อง login ก่อนเล่น (guest ไม่ถูกบันทึก), `USERS_TABLE` ใน user data, IAM role มี `dynamodb:UpdateItem` + `dynamodb:Scan`, ดู log `recordGameStats failed` ใน CloudWatch |
 | refresh หน้าแล้ว 404 | S3 Error document ต้องเป็น `index.html` |
