@@ -21,10 +21,12 @@ New-Item -ItemType Directory -Force $buildDir | Out-Null
 
 # ไม่เอา node_modules (EC2 รัน npm ci เอง) และไม่เอา .env (มี secret)
 tar -czf $output --exclude=node_modules --exclude=.env -C (Join-Path $root "server") .
+if ($LASTEXITCODE -ne 0) { throw "tar failed (exit code $LASTEXITCODE)" }
 
 Write-Host "Created $output"
 
 if ($Bucket) {
     aws s3 cp $output "s3://$Bucket/server.tar.gz"
+    if ($LASTEXITCODE -ne 0) { throw "aws s3 cp failed (exit code $LASTEXITCODE)" }
     Write-Host "Uploaded to s3://$Bucket/server.tar.gz"
 }

@@ -17,6 +17,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# $ErrorActionPreference ไม่หยุดเมื่อคำสั่งภายนอก (npm, aws) ล้ม ต้องเช็ค exit code เอง
+function Invoke-Step([string]$Name, [scriptblock]$Command) {
+    & $Command
+    if ($LASTEXITCODE -ne 0) { throw "$Name failed (exit code $LASTEXITCODE)" }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $clientDir = Join-Path $root "client"
 
@@ -26,13 +32,13 @@ try {
     $env:VITE_SOCKET_URL = $SocketUrl
     $env:VITE_AUTH_API_URL = $AuthApiUrl
 
-    npm ci
-    npm run build
+    Invoke-Step "npm ci" { npm ci }
+    Invoke-Step "npm run build" { npm run build }
 
     Write-Host "Built $clientDir\dist"
 
     if ($Bucket) {
-        aws s3 sync dist "s3://$Bucket" --delete
+        Invoke-Step "aws s3 sync" { aws s3 sync dist "s3://$Bucket" --delete }
         Write-Host "Uploaded to s3://$Bucket"
     }
 }
