@@ -41,23 +41,51 @@ function Home() {
 
   const requestTimerRef = useRef(null);
 
+  /*
+   * server ตอบ playerProfile กลับมา 1 ครั้งต่อการเปลี่ยนชื่อ / ตัวละคร 1 ครั้ง
+   * เน็ตช้าแล้วกดติดกัน คำตอบเก่าจะมาทับค่าที่เพิ่งกด
+   * -> นับคำตอบที่ยังค้าง แล้วใช้เฉพาะคำตอบของคำขอล่าสุด
+   */
+  const pendingProfileEchoesRef = useRef(0);
+
+  // ชื่อที่กำลังพิมพ์ (มีช่องว่างท้ายได้ แต่ server ตัดทิ้ง)
+  const localNameRef = useRef("");
+
   useEffect(() => {
     function handlePlayerProfile(profile) {
-      setArtistName(profile.name);
-
       setIsLoggedIn(profile.isLoggedIn);
+
+      if (pendingProfileEchoesRef.current > 0) {
+        pendingProfileEchoesRef.current -= 1;
+
+        if (pendingProfileEchoesRef.current > 0) {
+          return;
+        }
+      }
+
+      if (profile.name !== localNameRef.current.trim()) {
+        localNameRef.current = profile.name;
+        setArtistName(profile.name);
+      }
 
       if (profile.avatar) {
         setAvatar(profile.avatar);
       }
     }
 
+    // ต่อใหม่ = คำขอเก่าอาจไม่ได้คำตอบแล้ว
+    function resetPendingEchoes() {
+      pendingProfileEchoesRef.current = 0;
+    }
+
     socket.on("playerProfile", handlePlayerProfile);
+    socket.on("connect", resetPendingEchoes);
 
     socket.emit("getPlayerProfile");
 
     return () => {
       socket.off("playerProfile", handlePlayerProfile);
+      socket.off("connect", resetPendingEchoes);
     };
   }, []);
 
@@ -148,13 +176,21 @@ function Home() {
     }
 
     setArtistName(name);
+    localNameRef.current = name;
 
+    // ชื่อว่าง server ไม่ตอบกลับ -> ไม่ต้องส่ง
+    if (!name.trim()) {
+      return;
+    }
+
+    pendingProfileEchoesRef.current += 1;
     socket.emit("setPlayerName", name);
   }
 
   function handleAvatarChange(newAvatar) {
     setAvatar(newAvatar);
 
+    pendingProfileEchoesRef.current += 1;
     socket.emit("setPlayerAvatar", newAvatar);
   }
 
