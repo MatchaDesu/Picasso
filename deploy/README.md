@@ -49,6 +49,20 @@
 
 ลำดับการสร้างสำคัญ เพราะบางอย่างต้องใช้ค่าจากขั้นก่อนหน้า (เช่น ต้องมี URL ของ ALB ก่อน build หน้าเว็บ)
 
+### ใช้ AWS Academy Learner Lab
+
+ทำตามคู่มือนี้ได้ แต่ต่างจากบัญชีปกติตรงนี้:
+
+| เรื่อง | Learner Lab |
+|---|---|
+| Region | ส่วนใหญ่ใช้ได้แค่ **us-east-1** -> แทน `ap-southeast-1` ในคู่มือเป็น region ของ Lab ทุกจุด |
+| IAM Role ของ EC2 (ข้อ 7) | สร้างเองไม่ได้ ใช้ **`LabInstanceProfile`** (role `LabRole`) ที่มีให้แทน |
+| Lambda execution role (ข้อ 4) | ใช้ **`LabRole`** |
+| Instance refresh (อัปเดต server) | อาจถูกปิด -> ใช้วิธีสำรองในหัวข้อ [อัปเดตโค้ด server](#อัปเดตโค้ด-server) |
+| AWS CLI | Lab > **AWS Details** > AWS CLI: Show -> copy ไปวางใน `C:\Users\<ชื่อ>\.aws\credentials` บรรทัดแรกต้องเป็น **`[default]`** กุญแจหมดอายุทุกครั้งที่ Lab หมดเวลา ต้อง copy ใหม่ |
+
+เครดิต Lab ถูกหักตลอดที่ NAT Gateway / ALB / ElastiCache / EC2 ยังอยู่ (ปิด Lab แล้วบางอย่างยังคิดเงิน)
+
 ---
 
 ## 1. VPC และ Subnet
@@ -90,6 +104,10 @@ DynamoDB > Create table
 
 - **Lambda** สร้าง/อ่านบัญชี (`username`, `passwordHash`)
 - **EC2 (server เกม)** เพิ่ม `totalScore`, `gamesPlayed`, `wins` ทุกครั้งที่เกมจบ (เฉพาะคนที่ login) และอ่านทั้งตารางเพื่อทำ Leaderboard ผ่าน DynamoDB VPC Endpoint
+
+`wins` = ได้คะแนนสูงสุดของห้อง **เทียบกับทุกคนรวม guest** (guest ได้ที่ 1 -> คนที่ login ไม่มีใครได้ win ในเกมนั้น)
+
+EC2 จะใช้ตารางนี้ก็ต่อเมื่อ user data ตั้ง **`USERS_TABLE`** (ข้อ 8)
 
 ## 4. Lambda + API Gateway (Login/Register)
 
@@ -234,6 +252,16 @@ EC2 > Launch Templates > Create
 - Advanced details > IAM instance profile: `picasso-ec2-role`
 - Advanced details > **User data**: วางไฟล์ `deploy/ec2-user-data.sh` **แก้ส่วน "ตั้งค่า"** ให้ครบ (bucket, `CLIENT_URL`, `REDIS_URL`, `AUTH_SECRET`, `ASG_NAME`, `USERS_TABLE`)
 
+> ⚠️ **ห้ามลืม `USERS_TABLE=PicassoUsers`** (เขียน user data เองก็ต้องมีบรรทัดนี้ในไฟล์ env ของ server)
+> server **ไม่ error** ถ้าขาด แต่จะเก็บคะแนนในหน่วยความจำของแต่ละเครื่องแทน DynamoDB:
+> Leaderboard ไม่ตรงกันแต่ละเครื่อง (ALB สุ่มเครื่อง -> บางทีขึ้นบางทีไม่ขึ้น) และคะแนนหายเมื่อเครื่องถูกปิด
+>
+> เช็คหลังเครื่องขึ้น: ทุกเครื่องต้องตอบ Leaderboard จำนวนเท่ากัน
+> ```bash
+> cd server
+> node scripts/probe-leaderboard.js http://<ALB-DNS> 10
+> ```
+
 ## 9. Target Group + ALB
 
 ### Target group
@@ -331,6 +359,14 @@ aws autoscaling put-scaling-policy --auto-scaling-group-name picasso-asg --polic
 1. `.\deploy\package-server.ps1 -Bucket picasso-artifacts-<ชื่อไม่ซ้ำ>`
 2. ASG > **Instance refresh** > Start (เครื่องใหม่ดึงโค้ดใหม่ เครื่องเก่าถูกปิดทีละเครื่อง ผู้เล่น resume ไปเครื่องอื่นเอง)
 
+แก้ **user data / ค่า env** (เช่น เพิ่ม `USERS_TABLE`): Launch Template > Actions > **Modify template (Create new version)** > แก้ User data > Create แล้ว **Actions > Set default version** เป็นเวอร์ชันใหม่ จากนั้นแทนเครื่องตามข้อ 2 (ASG ต้องตั้ง Launch template version เป็น `Default` หรือ `Latest`)
+
+**Instance refresh ใช้ไม่ได้** (เช่น Learner Lab): แทนเครื่องเองแบบใดแบบหนึ่ง
+- **เพิ่มก่อนลด (ไม่ล่ม):** ASG > Edit > Desired capacity `4` > รอเครื่องใหม่ healthy ใน Target group > แก้กลับเป็น `2` (ASG ปิดเครื่องที่ใช้ template เก่าก่อน)
+- **Terminate ทีละเครื่อง:** EC2 > Terminate เครื่องเก่า 1 เครื่อง > รอเครื่องใหม่ healthy > ค่อยทำเครื่องถัดไป (ปิดพร้อมกันทุกเครื่อง = เกมล่ม 2-5 นาที)
+
+อัปเดตเฉพาะหน้าเว็บ ไม่ต้องแทนเครื่อง: รัน `deploy-client.ps1` (ข้อ 11) ซ้ำด้วย URL ชุดเดิม แล้ว Ctrl+F5
+
 ## ค่าใช้จ่ายโดยประมาณ (Singapore, ต่อชั่วโมง)
 
 | บริการ | ราคา |
@@ -354,6 +390,8 @@ aws autoscaling put-scaling-policy --auto-scaling-group-name picasso-asg --polic
 | Login ขึ้น Too many attempts ทั้งที่กดไม่กี่ครั้ง | Throttling ตั้งต่ำเกินไป (ข้อ 4.3) หรือมีคนยิง API อยู่ ดู metric `4xx` ของ API Gateway ใน CloudWatch |
 | Login ได้แต่ในเกมยังเป็น guest | `AUTH_SECRET` ของ Lambda กับ EC2 ไม่ตรงกัน |
 | Leaderboard ว่างตลอด | ต้อง login ก่อนเล่น (guest ไม่ถูกบันทึก), `USERS_TABLE` ใน user data, IAM role มี `dynamodb:UpdateItem` + `dynamodb:Scan`, ดู log `recordGameStats failed` ใน CloudWatch |
+| Leaderboard บางทีขึ้นบางทีไม่ขึ้น / refresh แล้วคะแนนเปลี่ยน | เครื่องไม่มี `USERS_TABLE` (เก็บคะแนนในหน่วยความจำแยกเครื่อง) เช็คด้วย `node scripts/probe-leaderboard.js` แล้วแก้ user data + แทนเครื่อง ([อัปเดตโค้ด server](#อัปเดตโค้ด-server)) |
+| Leaderboard มีคะแนนแต่ `wins` เป็น 0 | ปกติ ถ้า guest ได้ที่ 1 ของเกมนั้น |
 | refresh หน้าแล้ว 404 | S3 Error document ต้องเป็น `index.html` |
 | metric ActiveConnections ไม่ขึ้น | IAM role มี `CloudWatchAgentServerPolicy`, `ASG_NAME` ใน user data ตรงกับชื่อ ASG |
 
